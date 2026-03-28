@@ -3,17 +3,17 @@
 ## Build & Test Commands
 
 ```bash
-# Install dev dependencies
-pip install -e ".[dev]"
+# Install all dependencies (dev included)
+uv sync --all-extras
 
 # Run all tests
-pytest
+uv run pytest
 
 # Run specific test file
-pytest src/trdr/path/to/test_file.py
+uv run pytest src/trdr/path/to/test_file.py
 
 # Run specific test
-pytest src/trdr/path/to/test_file.py::TestClass::test_method
+uv run pytest src/trdr/path/to/test_file.py::TestClass::test_method
 ```
 
 ## Code Style Guidelines

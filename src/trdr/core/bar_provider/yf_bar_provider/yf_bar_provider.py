@@ -38,7 +38,7 @@ class YFBarProvider(BaseBarProvider):
         Use that method to create a new bar provider.
         """
         with self._tracer.start_as_current_span("YFBarProvider._initialize") as span:
-            self._no_data_errors = ["YFTzMissingError", "YFPricesMissingError", "JSONDecodeError"]
+            self._no_data_errors = ["YFTzMissingError", "YFPricesMissingError", "JSONDecodeError", "YFRateLimitError"]
             if not symbols:
                 span.set_status(trace.Status(trace.StatusCode.ERROR))
                 e = BarProviderException("Symbols must contain at least one symbol")
