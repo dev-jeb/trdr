@@ -116,12 +116,14 @@ class MockBroker(BaseBroker):
             else:
                 span.set_status(trace.StatusCode.OK)
 
-    async def _cancel_all_orders(self) -> None:
+    async def _cancel_all_orders(self, strategy_name: str) -> None:
         with self._tracer.start_as_current_span("mock_broker._cancel_all_orders") as span:
             try:
                 if hasattr(self, "_pending_orders"):
-                    self._pending_orders = []
-                    span.add_event("Cleared all pending orders")
+                    self._pending_orders = [
+                        o for o in self._pending_orders if o.strategy_name != strategy_name
+                    ]
+                    span.add_event(f"Cleared pending orders for strategy: {strategy_name}")
             except Exception as e:
                 span.record_exception(e)
                 span.set_status(trace.StatusCode.ERROR)

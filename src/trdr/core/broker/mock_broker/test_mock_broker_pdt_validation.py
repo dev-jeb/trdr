@@ -61,6 +61,8 @@ def test_nun_strategy_buy_orders_day_trade_limits(mock_broker_with_nun_strategy,
                 status=OrderStatus.PENDING,
                 current_price=Money(amount=Decimal(100)),
                 created_at=created_at,
+                client_order_id="test-strategy:abc12345",
+                strategy_name="test-strategy",
             )
             asyncio.run(broker._validate_pre_order(order))
         else:
@@ -101,6 +103,8 @@ def test_nun_strategy_sell_orders_day_trade_limits(mock_broker_with_nun_strategy
             status=OrderStatus.PENDING,
             current_price=Money(amount=Decimal(100)),
             created_at=created_at,
+            client_order_id="test-strategy:abc12345",
+            strategy_name="test-strategy",
         )
 
         if day_trade_count < 3:
@@ -139,6 +143,8 @@ def test_wiggle_strategy_buy_orders_day_trade_limits(mock_broker_with_wiggle_str
         status=OrderStatus.PENDING,
         current_price=Money(amount=Decimal(100)),
         created_at=created_at,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     broker._day_trade_count = 0
@@ -187,6 +193,8 @@ def test_wiggle_strategy_sell_orders_day_trade_limits(mock_broker_with_wiggle_st
             status=OrderStatus.PENDING,
             current_price=Money(amount=Decimal(100)),
             created_at=created_at,
+            client_order_id="test-strategy:abc12345",
+            strategy_name="test-strategy",
         )
 
         if day_trade_count < 3:
@@ -224,6 +232,8 @@ def test_yolo_strategy_buy_orders_day_trade_limits(mock_broker_with_yolo_strateg
         status=OrderStatus.PENDING,
         current_price=Money(amount=Decimal(100)),
         created_at=created_at,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     broker._day_trade_count = 0
@@ -266,6 +276,8 @@ def test_yolo_strategy_sell_orders_day_trade_limits(mock_broker_with_yolo_strate
             status=OrderStatus.PENDING,
             current_price=Money(amount=Decimal(100)),
             created_at=created_at,
+            client_order_id="test-strategy:abc12345",
+            strategy_name="test-strategy",
         )
 
         if day_trade_count < 3:

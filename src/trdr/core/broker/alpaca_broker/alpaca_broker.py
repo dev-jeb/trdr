@@ -297,6 +297,10 @@ class AlpacaBroker(BaseBroker):
                     span.set_status(Status(StatusCode.ERROR, "Status is None"))
                     raise ValueError("Status is None")
 
+                # Parse strategy name from client_order_id
+                client_order_id = alpaca_order.get("client_order_id", "")
+                strategy_name = client_order_id.rsplit(":", 1)[0] if ":" in client_order_id else "unknown"
+
                 # Create our Order model
                 order = Order(
                     symbol=symbol,
@@ -308,6 +312,8 @@ class AlpacaBroker(BaseBroker):
                     status=status,
                     created_at=created_at,
                     filled_at=filled_at,
+                    client_order_id=client_order_id,
+                    strategy_name=strategy_name,
                 )
 
                 span.set_status(Status(StatusCode.OK))
@@ -353,6 +359,7 @@ class AlpacaBroker(BaseBroker):
                 "side": order.side.value,
                 "type": order.type.value,
                 "time_in_force": order.time_in_force,
+                "client_order_id": order.client_order_id,
             }
 
             async with self._session.post(
@@ -370,33 +377,39 @@ class AlpacaBroker(BaseBroker):
                 span.set_status(Status(StatusCode.OK))
                 return
 
-    async def _cancel_all_orders(self) -> None:
+    async def _cancel_all_orders(self, strategy_name: str) -> None:
         with self._tracer.start_as_current_span("alpaca_broker._cancel_all_orders") as span:
             try:
-                async with self._session.delete(f"{self._base_url}/v2/orders", headers=self._headers) as response:
-                    if response.status == 207:
-                        cancellation_results = await response.json()
-                        span.set_attribute("cancelled_orders.count", len(cancellation_results))
+                span.set_attribute("strategy_name", strategy_name)
+                async with self._session.get(
+                    f"{self._base_url}/v2/orders",
+                    headers=self._headers,
+                    params={"status": "open"},
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        span.set_status(Status(StatusCode.ERROR, f"Failed to fetch open orders: {error_text}"))
+                        raise Exception(f"Failed to fetch open orders: {response.status} {error_text}")
+                    open_orders = await response.json()
 
-                        # Log any individual order cancellation failures
-                        for result in cancellation_results:
-                            if result.get("status") != 200:
+                cancelled_count = 0
+                for order in open_orders:
+                    client_order_id = order.get("client_order_id", "")
+                    if client_order_id.startswith(f"{strategy_name}:"):
+                        order_id = order["id"]
+                        async with self._session.delete(
+                            f"{self._base_url}/v2/orders/{order_id}", headers=self._headers
+                        ) as cancel_response:
+                            if cancel_response.status in (200, 204):
+                                cancelled_count += 1
+                            else:
                                 span.add_event(
                                     "order_cancellation_failed",
-                                    {"order_id": result.get("id"), "status": result.get("status")},
+                                    {"order_id": order_id, "status": cancel_response.status},
                                 )
 
-                        span.set_status(Status(StatusCode.OK))
-                        return
-
-                    error_text = await response.text()
-                    span.set_attribute("error.type", "http_error")
-                    span.set_attribute("error.status_code", response.status)
-                    span.set_attribute("error.message", error_text)
-                    span.set_status(
-                        Status(StatusCode.ERROR, f"Failed to cancel orders: {response.status} {error_text}")
-                    )
-                    raise Exception(f"Failed to cancel orders: {response.status} {error_text}")
+                span.set_attribute("cancelled_orders.count", cancelled_count)
+                span.set_status(Status(StatusCode.OK))
 
             except Exception as e:
                 span.record_exception(e)

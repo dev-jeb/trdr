@@ -17,6 +17,7 @@ class OrderCriteria(BaseModel):
     side: Optional[OrderSide] = None
     type: Optional[OrderType] = None
     status: Optional[OrderStatus] = None
+    strategy_name: str = "test-strategy"
     price_range: tuple[Decimal, Decimal] = (Decimal("50"), Decimal("200"))
     quantity_range: tuple[int, int] = (1, 100)
     partial_fill_probability: float = 0.2  # Probability of partial fill when status is PARTIAL_FILL
@@ -113,6 +114,8 @@ class OrderGenerator:
             # Generate a random symbol if none provided
             symbol = self.criteria.symbol or "".join(random.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZ", k=4))
 
+            client_order_id = f"{self.criteria.strategy_name}:{uuid.uuid4().hex[:8]}"
+
             order = Order(
                 symbol=symbol,
                 quantity_requested=quantity_requested,
@@ -124,6 +127,8 @@ class OrderGenerator:
                 current_price=price,
                 created_at=created_at,
                 filled_at=filled_at,
+                client_order_id=client_order_id,
+                strategy_name=self.criteria.strategy_name,
             )
 
             orders.append(order)

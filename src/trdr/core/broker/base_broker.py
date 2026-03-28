@@ -140,9 +140,10 @@ class BaseBroker(ABC):
         pass
 
     @abstractmethod
-    async def _cancel_all_orders(self) -> None:
+    async def _cancel_all_orders(self, strategy_name: str) -> None:
         """
-        Implement the low-level order cancellation logic specific to the subclass (e.g., interaction with the API).
+        Implement the low-level order cancellation logic specific to the subclass.
+        Only cancels orders belonging to the specified strategy.
         """
         pass
 
@@ -244,9 +245,10 @@ class BaseBroker(ABC):
                 )
             )
 
-    async def cancel_all_orders(self) -> None:
+    async def cancel_all_orders(self, strategy_name: str) -> None:
         with self._tracer.start_as_current_span("BaseBroker.cancel_all_orders") as span:
-            await self._cancel_all_orders()
+            span.set_attribute("strategy_name", strategy_name)
+            await self._cancel_all_orders(strategy_name)
             self._is_stale_flag = True
             span.set_status(trace.StatusCode.OK)
 

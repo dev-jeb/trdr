@@ -1,4 +1,6 @@
 from typing import Type, TypeVar, Dict, Any
+from decimal import Decimal
+import uuid
 from opentelemetry import trace
 from datetime import datetime
 
@@ -103,30 +105,22 @@ class TradingEngine:
                 span.set_status(trace.StatusCode.ERROR)
                 raise
 
+    def _generate_client_order_id(self) -> str:
+        """Generate a client_order_id encoding the strategy name."""
+        return f"{self.strategy_file_name}:{uuid.uuid4().hex[:8]}"
+
     async def execute(self) -> None:
         """
         Execute the trading strategy across all available securities.
 
-        This method:
-        1. Cancels any pending orders to ensure a clean slate
-        2. Iterates over all available securities
-        3. For each security:
-           - Determines whether to:
-             a. Exit an existing position (if held)
-             b. Enter a new position (if not held)
-           - Executes the appropriate orders through the broker
-
-        The execution logic follows these rules:
-        - For existing positions: Evaluate exit conditions and sell if met
-        - For potential new positions: Evaluate entry conditions and buy if met
-        - Position sizing is determined by the strategy's sizing rules
-
-        If a required context value is missing, the security is skipped.
+        Each strategy only manages its own positions, identified via client_order_id
+        tagging. A strategy will only exit shares it bought, and can enter a position
+        on a symbol even if another strategy already holds shares in it.
         """
         with self._tracer.start_as_current_span("TradingEngine.execute") as span:
             try:
-                span.add_event("canceling_pending_orders")
-                await self.trading_context.broker.cancel_all_orders()
+                span.add_event("canceling_pending_orders_for_strategy")
+                await self.trading_context.broker.cancel_all_orders(strategy_name=self.strategy_file_name)
 
                 processed_count = 0
                 skipped_count = 0
@@ -134,29 +128,39 @@ class TradingEngine:
                 entry_signals = 0
 
                 while await self.trading_context.next_symbol():
-                    with self._tracer.start_as_current_span(f"Strategy.process_security") as security_span:
+                    with self._tracer.start_as_current_span("Strategy.process_security") as security_span:
                         security_span.set_attribute(
                             "trading_context.current_symbol", self.trading_context.current_symbol
                         )
+                        security_span.set_attribute("strategy_name", self.strategy_file_name)
 
-                        # Handle existing positions - check exit conditions
-                        if self.trading_context.current_position:
+                        # Determine this strategy's share count in the current position
+                        position = self.trading_context.current_position
+                        strategy_size = (
+                            position.get_size_for_strategy(self.strategy_file_name)
+                            if position
+                            else Decimal(0)
+                        )
+                        security_span.set_attribute("strategy_size", float(strategy_size))
+
+                        if strategy_size > 0:
+                            # This strategy owns shares — evaluate exit
                             security_span.add_event("evaluating_exit_conditions")
                             try:
                                 should_exit = await self.strategy_ast.evaluate_exit(self.trading_context)
                                 security_span.set_attribute("exit_signal", should_exit)
 
                                 if should_exit:
-                                    security_span.add_event("placing_sell_order")
-
                                     order = Order(
                                         symbol=self.trading_context.current_symbol,
                                         side=OrderSide.SELL,
-                                        quantity_requested=self.trading_context.current_position.size,
+                                        quantity_requested=strategy_size,
                                         status=OrderStatus.PENDING,
                                         type=OrderType.MARKET,
                                         created_at=TradingDateTime.now(),
                                         current_price=self.trading_context.current_security.current_bar.close,
+                                        client_order_id=self._generate_client_order_id(),
+                                        strategy_name=self.strategy_file_name,
                                     )
 
                                     security_span.add_event("placing_sell_order")
@@ -164,20 +168,18 @@ class TradingEngine:
                                     exit_signals += 1
 
                             except MissingContextValue:
-                                # Skip if required context value is missing
                                 security_span.add_event("missing_context_value_for_exit")
                                 skipped_count += 1
                                 continue
 
-                        # Handle potential new positions - check entry conditions
                         else:
+                            # This strategy has no shares — evaluate entry
                             security_span.add_event("evaluating_entry_conditions")
                             try:
                                 should_enter = await self.strategy_ast.evaluate_entry(self.trading_context)
                                 security_span.set_attribute("entry_signal", should_enter)
 
                                 if should_enter:
-                                    # Get position size from strategy's sizing rules
                                     security_span.add_event("evaluating_sizing")
                                     dollar_amount = await self.strategy_ast.evaluate_sizing(self.trading_context)
                                     security_span.set_attribute("dollar_amount_requested", float(dollar_amount))
@@ -195,6 +197,8 @@ class TradingEngine:
                                         type=OrderType.MARKET,
                                         created_at=TradingDateTime.now(),
                                         current_price=self.trading_context.current_security.current_bar.close,
+                                        client_order_id=self._generate_client_order_id(),
+                                        strategy_name=self.strategy_file_name,
                                     )
 
                                     security_span.add_event("placing_buy_order")
@@ -202,7 +206,6 @@ class TradingEngine:
                                     entry_signals += 1
 
                             except MissingContextValue:
-                                # Skip if required context value is missing
                                 security_span.add_event("missing_context_value_for_entry")
                                 skipped_count += 1
                                 continue

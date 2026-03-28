@@ -92,6 +92,8 @@ def test_place_order(mock_broker_with_nun_strategy):
         current_price=Money(amount=Decimal(100)),
         created_at=trading_datetime,
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     assert broker._pending_orders == []
     assert broker._is_stale_flag is False
@@ -126,6 +128,8 @@ def test_adding_to_existing_position(mock_broker_with_wiggle_strategy):
         current_price=Money(amount=Decimal(100)),
         created_at=trading_datetime,
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     asyncio.run(broker.place_order(order))
     position = asyncio.run(broker.get_position("TEST"))
@@ -147,6 +151,8 @@ def test_adding_to_existing_position(mock_broker_with_wiggle_strategy):
         current_price=Money(amount=Decimal(100)),
         created_at=trading_datetime,
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     asyncio.run(broker.place_order(next_order))
     position = asyncio.run(broker.get_position("TEST"))
@@ -173,6 +179,8 @@ def test_adding_to_existing_position(mock_broker_with_wiggle_strategy):
         current_price=Money(amount=Decimal(100)),
         created_at=trading_datetime,
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     asyncio.run(broker.place_order(close_order))
     position = asyncio.run(broker.get_position("TEST"))
@@ -205,6 +213,8 @@ def test_refresh_equity(mock_broker_with_nun_strategy):
         current_price=Money(amount=Decimal(100)),
         created_at=trading_datetime,
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     asyncio.run(broker.place_order(order))
     assert broker._pending_orders == [order]
@@ -237,6 +247,8 @@ def test_cancel_all_orders(mock_broker_with_nun_strategy):
         current_price=Money(amount=Decimal(100)),
         created_at=trading_datetime,
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     order2 = Order(
         symbol="TEST2",
@@ -248,6 +260,8 @@ def test_cancel_all_orders(mock_broker_with_nun_strategy):
         current_price=Money(amount=Decimal(100)),
         created_at=trading_datetime,
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     asyncio.run(broker.place_order(order1))
@@ -255,8 +269,8 @@ def test_cancel_all_orders(mock_broker_with_nun_strategy):
     asyncio.run(broker.place_order(order2))
     assert len(broker._pending_orders) == 2
 
-    # Cancel all orders
-    asyncio.run(broker.cancel_all_orders())
+    # Cancel all orders for the strategy
+    asyncio.run(broker.cancel_all_orders("test-strategy"))
     assert len(broker._pending_orders) == 0
     assert broker._is_stale_flag is True
 
@@ -283,6 +297,8 @@ def test_account_exposure(mock_broker_with_nun_strategy):
         current_price=Money(amount=Decimal(100)),
         created_at=trading_datetime,
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     asyncio.run(broker.place_order(order))
 
@@ -314,6 +330,8 @@ def test_pdt_cash_validation(mock_broker_with_nun_strategy):
         current_price=Money(amount=Decimal(100)),
         created_at=TradingDateTime.now(),
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     with pytest.raises(PDTRuleViolationException):
         asyncio.run(broker.place_order(order))
@@ -344,6 +362,8 @@ def test_pdt_cash_validation_for_shorts(mock_broker_with_nun_strategy):
         current_price=Money(amount=Decimal(100)),
         created_at=TradingDateTime.now(),
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     with pytest.raises(PDTRuleViolationException):
@@ -384,6 +404,8 @@ def test_position_exposure(mock_broker_with_nun_strategy):
         current_price=Money(amount=Decimal(100)),
         created_at=trading_datetime,
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     asyncio.run(broker.place_order(order))
 

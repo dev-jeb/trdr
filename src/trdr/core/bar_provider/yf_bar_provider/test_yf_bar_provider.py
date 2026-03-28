@@ -39,9 +39,13 @@ def test_get_bars_throws_exception_when_symbol_is_not_in_data_cache(yf_bar_provi
 
 def test_provider_throws_exception_when_data_source_returns_error(monkeypatch):
     # ensure we raise an exception when the data source returns an error that is not a missing symbol error
+    def fake_download_with_error(*args, **kwargs):
+        result = fake_yf_download(*args, **kwargs)
+        yf.shared._ERRORS = {"ABCDEFG": "RandomYFError()"}
+        return result
+
     with pytest.raises(BarProviderException):
-        monkeypatch.setattr(yf, "download", fake_yf_download)
-        monkeypatch.setattr(yf.shared, "_ERRORS", {"ABCDEFG": "RandomYFError()"})
+        monkeypatch.setattr(yf, "download", fake_download_with_error)
         bars = asyncio.run(YFBarProvider.create(["ABCDEFG"]))
 
 

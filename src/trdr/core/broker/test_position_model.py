@@ -47,6 +47,8 @@ def test_get_orders_created_after_dt():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     order2 = Order(
         symbol="AAPL",
@@ -58,6 +60,8 @@ def test_get_orders_created_after_dt():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(yesterday),
         filled_at=TradingDateTime.from_utc(yesterday),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     order3 = Order(
         symbol="AAPL",
@@ -69,6 +73,8 @@ def test_get_orders_created_after_dt():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(day_before),
         filled_at=TradingDateTime.from_utc(day_before),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order1, order2, order3])
@@ -100,6 +106,8 @@ def test_size_all_buy_orders():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     order2 = Order(
         symbol="AAPL",
@@ -111,6 +119,8 @@ def test_size_all_buy_orders():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order1, order2])
@@ -136,6 +146,8 @@ def test_size_all_sell_orders():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     order2 = Order(
         symbol="AAPL",
@@ -147,6 +159,8 @@ def test_size_all_sell_orders():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order1, order2])
@@ -172,6 +186,8 @@ def test_size_mixed_buy_sell_orders():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     order2 = Order(
         symbol="AAPL",
@@ -183,6 +199,8 @@ def test_size_mixed_buy_sell_orders():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     order3 = Order(
         symbol="AAPL",
@@ -194,6 +212,8 @@ def test_size_mixed_buy_sell_orders():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     order4 = Order(
@@ -206,6 +226,8 @@ def test_size_mixed_buy_sell_orders():
         status=OrderStatus.PARTIAL_FILL,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order1, order2, order3, order4])
@@ -230,6 +252,8 @@ def test_get_market_value():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     order2 = Order(
         symbol="AAPL",
@@ -241,6 +265,8 @@ def test_get_market_value():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order1, order2])
@@ -267,6 +293,8 @@ def test_average_cost_single_buy_order():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order])
@@ -291,6 +319,8 @@ def test_average_cost_multiple_buy_orders():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     order2 = Order(
         symbol="AAPL",
@@ -302,6 +332,8 @@ def test_average_cost_multiple_buy_orders():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order1, order2])
@@ -328,6 +360,8 @@ def test_average_cost_mixed_buy_sell_orders():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     order2 = Order(
         symbol="AAPL",
@@ -339,6 +373,8 @@ def test_average_cost_mixed_buy_sell_orders():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     order3 = Order(
         symbol="AAPL",
@@ -350,6 +386,8 @@ def test_average_cost_mixed_buy_sell_orders():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order1, order2, order3])
@@ -378,6 +416,8 @@ def test_to_json():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order])
@@ -407,6 +447,8 @@ def test_str_representation():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order])
@@ -438,6 +480,8 @@ def test_position_with_only_pending_orders():
         current_price=Money(amount=Decimal("100")),
         created_at=TradingDateTime.from_utc(now),
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     order2 = Order(
         symbol="AAPL",
@@ -450,6 +494,8 @@ def test_position_with_only_pending_orders():
         current_price=Money(amount=Decimal("100")),
         created_at=TradingDateTime.from_utc(now),
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order1, order2])
@@ -475,6 +521,8 @@ def test_position_with_rejected_cancelled_orders():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     order2 = Order(
         symbol="AAPL",
@@ -486,6 +534,8 @@ def test_position_with_rejected_cancelled_orders():
         status=OrderStatus.CANCELED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     order3 = Order(
         symbol="AAPL",
@@ -497,6 +547,8 @@ def test_position_with_rejected_cancelled_orders():
         status=OrderStatus.REJECTED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order1, order2, order3])
@@ -522,6 +574,8 @@ def test_position_with_mixed_filled_and_partial_fill_orders():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     order2 = Order(
         symbol="AAPL",
@@ -533,6 +587,8 @@ def test_position_with_mixed_filled_and_partial_fill_orders():
         status=OrderStatus.PARTIAL_FILL,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order1, order2])
@@ -558,6 +614,8 @@ def test_market_value_with_negative_position_size():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order])
@@ -585,6 +643,8 @@ def test_changes_to_orders_reflected_in_position():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order])
@@ -614,6 +674,8 @@ def test_adding_orders_to_position():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     position = Position(symbol="AAPL", orders=[order1])
@@ -630,6 +692,8 @@ def test_adding_orders_to_position():
         status=OrderStatus.FILLED,
         created_at=TradingDateTime.from_utc(now),
         filled_at=TradingDateTime.from_utc(now),
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
     position.orders.append(order2)
 

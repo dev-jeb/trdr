@@ -20,6 +20,8 @@ def test_creating_order_with_quantity(weekday_trading_datetime):
         avg_fill_price=None,
         created_at=weekday_trading_datetime,
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     assert order.symbol == "AAPL"
@@ -41,6 +43,8 @@ def test_filled_order_validation(weekday_trading_datetime):
         avg_fill_price=Money(amount=Decimal("150.00")),
         created_at=weekday_trading_datetime,
         filled_at=filled_at,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     assert valid_order is not None
@@ -58,6 +62,8 @@ def test_filled_order_validation(weekday_trading_datetime):
             avg_fill_price=Money(amount=Decimal("150.00")),
             created_at=weekday_trading_datetime,
             filled_at=filled_at,
+            client_order_id="test-strategy:abc12345",
+            strategy_name="test-strategy",
         )
 
     # Missing fill price
@@ -72,6 +78,8 @@ def test_filled_order_validation(weekday_trading_datetime):
             avg_fill_price=None,  # Missing fill price
             created_at=weekday_trading_datetime,
             filled_at=filled_at,
+            client_order_id="test-strategy:abc12345",
+            strategy_name="test-strategy",
         )
 
     # Missing filled_at time
@@ -86,6 +94,8 @@ def test_filled_order_validation(weekday_trading_datetime):
             avg_fill_price=Money(amount=Decimal("150.00")),
             created_at=weekday_trading_datetime,
             filled_at=None,  # Missing filled_at time
+            client_order_id="test-strategy:abc12345",
+            strategy_name="test-strategy",
         )
 
 
@@ -103,6 +113,8 @@ def test_orders_cannot_be_filled_on_weekends(weekday_trading_datetime, weekend_t
             avg_fill_price=Money(amount=Decimal("150.00")),
             created_at=weekend_trading_datetime,
             filled_at=weekend_trading_datetime,
+            client_order_id="test-strategy:abc12345",
+            strategy_name="test-strategy",
         )
 
 
@@ -121,6 +133,8 @@ def test_partial_fill_validation(weekday_trading_datetime):
         avg_fill_price=Money(amount=Decimal("150.00")),
         created_at=weekday_trading_datetime,
         filled_at=filled_at,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     assert valid_partial is not None
@@ -138,6 +152,8 @@ def test_partial_fill_validation(weekday_trading_datetime):
             avg_fill_price=Money(amount=Decimal("150.00")),
             created_at=weekday_trading_datetime,
             filled_at=filled_at,
+            client_order_id="test-strategy:abc12345",
+            strategy_name="test-strategy",
         )
 
     # Incorrect partial fill (quantity_filled > quantity_requested)
@@ -152,6 +168,8 @@ def test_partial_fill_validation(weekday_trading_datetime):
             avg_fill_price=Money(amount=Decimal("150.00")),
             created_at=weekday_trading_datetime,
             filled_at=filled_at,
+            client_order_id="test-strategy:abc12345",
+            strategy_name="test-strategy",
         )
 
     # Missing fill price
@@ -166,6 +184,8 @@ def test_partial_fill_validation(weekday_trading_datetime):
             avg_fill_price=None,  # Missing fill price
             created_at=weekday_trading_datetime,
             filled_at=filled_at,
+            client_order_id="test-strategy:abc12345",
+            strategy_name="test-strategy",
         )
 
     # Missing filled_at time
@@ -180,6 +200,8 @@ def test_partial_fill_validation(weekday_trading_datetime):
             avg_fill_price=Money(amount=Decimal("150.00")),
             created_at=weekday_trading_datetime,
             filled_at=None,  # Missing filled_at time
+            client_order_id="test-strategy:abc12345",
+            strategy_name="test-strategy",
         )
 
 
@@ -199,6 +221,8 @@ def test_pending_order_validation(weekday_trading_datetime):
         avg_fill_price=None,
         created_at=weekday_trading_datetime,
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     assert valid_pending is not None
@@ -217,6 +241,8 @@ def test_pending_order_validation(weekday_trading_datetime):
             avg_fill_price=None,
             created_at=weekday_trading_datetime,
             filled_at=None,
+            client_order_id="test-strategy:abc12345",
+            strategy_name="test-strategy",
         )
 
     # Invalid pending order with fill price
@@ -232,6 +258,8 @@ def test_pending_order_validation(weekday_trading_datetime):
             avg_fill_price=Money(amount=Decimal("150.00")),  # Should be None for pending
             created_at=weekday_trading_datetime,
             filled_at=None,
+            client_order_id="test-strategy:abc12345",
+            strategy_name="test-strategy",
         )
 
     # Invalid pending order with filled_at
@@ -247,6 +275,8 @@ def test_pending_order_validation(weekday_trading_datetime):
             avg_fill_price=None,
             created_at=weekday_trading_datetime,
             filled_at=filled_at,  # Should be None for pending
+            client_order_id="test-strategy:abc12345",
+            strategy_name="test-strategy",
         )
 
 
@@ -265,6 +295,8 @@ def test_cancelled_and_rejected_orders(weekday_trading_datetime):
         avg_fill_price=None,
         created_at=weekday_trading_datetime,
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     assert cancelled_no_fill is not None
@@ -281,6 +313,8 @@ def test_cancelled_and_rejected_orders(weekday_trading_datetime):
         avg_fill_price=None,
         created_at=weekday_trading_datetime,
         filled_at=None,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     assert rejected_order is not None
@@ -297,6 +331,8 @@ def test_cancelled_and_rejected_orders(weekday_trading_datetime):
         avg_fill_price=Money(amount=Decimal("150.00")),
         created_at=weekday_trading_datetime,
         filled_at=filled_at,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     assert partial_cancelled is not None
@@ -318,6 +354,8 @@ def test_string_representation(weekday_trading_datetime):
         avg_fill_price=Money(amount=Decimal("150.00")),
         created_at=weekday_trading_datetime,
         filled_at=filled_at,
+        client_order_id="test-strategy:abc12345",
+        strategy_name="test-strategy",
     )
 
     str_repr = str(order)

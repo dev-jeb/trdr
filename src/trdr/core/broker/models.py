@@ -33,14 +33,10 @@ class Order(BaseModel):
     created_at: TradingDateTime
     filled_at: TradingDateTime | None = None
     time_in_force: str | None = "gtc"
-    """
-    The base_broker._validate_pre_order method needs to know the current price of the security to check if the trade would put us below the PDT minimum cash requirement (quantity_requested * current_price). If the trade does put us below the PDT minimum cash requirement, we need to enfore pdt rules as closing this position would result in a day trade since you fell below the PDT minimum cash requirement.
-    """
     current_price: Money | None = None
-    """
-    At one point I had dollar_amount_requested as a property. This was so a user could specify either a dollar amount or a quantity. I removed it as quantity_requested is more flexible and captures the intent of the user. For example, the Alpaca API only supports dollar amounts if the order type is a market order and a time in force of "day". My hope was to reduce complexityvby only trading in number of shares.
-    """
     quantity_requested: Decimal
+    client_order_id: str
+    strategy_name: str
 
     @property
     def net_quantity_filled(self) -> Decimal:
@@ -102,6 +98,26 @@ class Position(BaseModel):
         if len(self.orders) == 0:
             return []
         return [order for order in self.orders if order.created_at.timestamp >= dt.timestamp]
+
+    def get_orders_for_strategy(self, strategy_name: str) -> List[Order]:
+        return [order for order in self.orders if order.strategy_name == strategy_name]
+
+    def get_size_for_strategy(self, strategy_name: str) -> Decimal:
+        strategy_orders = self.get_orders_for_strategy(strategy_name)
+        if not strategy_orders:
+            return Decimal(0)
+        return abs(sum(order.net_quantity_filled for order in strategy_orders))
+
+    def get_average_cost_for_strategy(self, strategy_name: str) -> Money:
+        strategy_orders = self.get_orders_for_strategy(strategy_name)
+        if not strategy_orders:
+            return Money(amount=Decimal(0))
+        size = abs(sum(order.net_quantity_filled for order in strategy_orders))
+        if size == Decimal(0):
+            return Money(amount=Decimal(0))
+        return Money(
+            amount=sum(order.net_quantity_filled * order.avg_fill_price.amount for order in strategy_orders) / size
+        )
 
     @property
     def side(self) -> PositionSide:
