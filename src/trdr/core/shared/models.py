@@ -223,9 +223,38 @@ class ContextIdentifier(str, Enum):
     AV100 = "AV100"  # 100-day average volume
     AV200 = "AV200"  # 200-day average volume
 
+    # RSI (Relative Strength Index)
+    RSI7 = "RSI7"
+    RSI14 = "RSI14"
+    RSI21 = "RSI21"
+
+    # EMA (Exponential Moving Average)
+    EMA5 = "EMA5"
+    EMA12 = "EMA12"
+    EMA20 = "EMA20"
+    EMA26 = "EMA26"
+    EMA50 = "EMA50"
+
+    # MACD (Moving Average Convergence Divergence)
+    MACD_LINE = "MACD_LINE"
+    MACD_SIGNAL = "MACD_SIGNAL"
+    MACD_HISTOGRAM = "MACD_HISTOGRAM"
+
+    # ATR (Average True Range)
+    ATR14 = "ATR14"
+
+    # Bollinger Bands (20-period, 2 std dev)
+    BBAND_UPPER = "BBAND_UPPER"
+    BBAND_LOWER = "BBAND_LOWER"
+
+    # Price action
+    DAILY_HIGH = "DAILY_HIGH"
+    DAILY_LOW = "DAILY_LOW"
+    PERCENT_CHANGE = "PERCENT_CHANGE"
+
     # Security-specific fields (from security provider)
-    CURRENT_VOLUME = "CURRENT_VOLUME"  # Current trading volume
-    CURRENT_PRICE = "CURRENT_PRICE"  # Current security price
+    CURRENT_VOLUME = "CURRENT_VOLUME"
+    CURRENT_PRICE = "CURRENT_PRICE"
 
     # Account data (from broker)
     ACCOUNT_EXPOSURE = "ACCOUNT_EXPOSURE"  # Ratio of invested funds to total capital

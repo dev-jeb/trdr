@@ -311,6 +311,69 @@ class TradingContext:
                         span.add_event(str(error))
                         raise error
                     return average_cost.amount
+
+                # RSI
+                case ContextIdentifier.RSI7 | ContextIdentifier.RSI14 | ContextIdentifier.RSI21:
+                    period = {"RSI7": 7, "RSI14": 14, "RSI21": 21}[identifier.value]
+                    value = self.current_security.compute_rsi(period)
+                    if value is None:
+                        raise MissingContextValue(f"RSI{period} for {self.current_symbol} is not available")
+                    return value
+
+                # EMA
+                case ContextIdentifier.EMA5 | ContextIdentifier.EMA12 | ContextIdentifier.EMA20 | ContextIdentifier.EMA26 | ContextIdentifier.EMA50:
+                    period = {"EMA5": 5, "EMA12": 12, "EMA20": 20, "EMA26": 26, "EMA50": 50}[identifier.value]
+                    value = self.current_security.compute_ema(period)
+                    if value is None:
+                        raise MissingContextValue(f"EMA{period} for {self.current_symbol} is not available")
+                    return value.amount
+
+                # MACD
+                case ContextIdentifier.MACD_LINE | ContextIdentifier.MACD_SIGNAL | ContextIdentifier.MACD_HISTOGRAM:
+                    result = self.current_security.compute_macd()
+                    if result is None:
+                        raise MissingContextValue(f"MACD for {self.current_symbol} is not available")
+                    macd_line, signal, histogram = result
+                    if identifier == ContextIdentifier.MACD_LINE:
+                        return macd_line
+                    elif identifier == ContextIdentifier.MACD_SIGNAL:
+                        return signal
+                    else:
+                        return histogram
+
+                # ATR
+                case ContextIdentifier.ATR14:
+                    value = self.current_security.compute_atr(14)
+                    if value is None:
+                        raise MissingContextValue(f"ATR14 for {self.current_symbol} is not available")
+                    return value
+
+                # Bollinger Bands
+                case ContextIdentifier.BBAND_UPPER:
+                    value = self.current_security.compute_bollinger_band(upper=True)
+                    if value is None:
+                        raise MissingContextValue(f"BBAND_UPPER for {self.current_symbol} is not available")
+                    return value.amount
+
+                case ContextIdentifier.BBAND_LOWER:
+                    value = self.current_security.compute_bollinger_band(upper=False)
+                    if value is None:
+                        raise MissingContextValue(f"BBAND_LOWER for {self.current_symbol} is not available")
+                    return value.amount
+
+                # Price action
+                case ContextIdentifier.DAILY_HIGH:
+                    return self.current_security.current_bar.high.amount
+
+                case ContextIdentifier.DAILY_LOW:
+                    return self.current_security.current_bar.low.amount
+
+                case ContextIdentifier.PERCENT_CHANGE:
+                    value = self.current_security.compute_percent_change()
+                    if value is None:
+                        raise MissingContextValue(f"PERCENT_CHANGE for {self.current_symbol} is not available")
+                    return value
+
                 case _:
                     span.set_status(trace.StatusCode.ERROR)
                     error = ValueError(f"Invalid context identifier: {identifier}")

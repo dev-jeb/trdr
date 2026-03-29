@@ -1,6 +1,7 @@
 from typing import List, Optional
 from pydantic import BaseModel, model_validator, ConfigDict
 from decimal import Decimal
+from statistics import stdev
 
 from ..bar_provider.models import Bar
 from ..shared.models import Money, Timeframe
@@ -152,6 +153,152 @@ class Security(BaseModel):
             return None
 
         return short_yesterday.amount > long_yesterday.amount and short_today.amount < long_today.amount
+
+    def compute_rsi(self, period_days: int, offset: int = 0) -> Decimal | None:
+        """Compute Relative Strength Index over the given period."""
+        bars = self.bars
+        needed = period_days + 1 + offset  # +1 for price changes
+        if len(bars) < needed:
+            return None
+
+        end_idx = len(bars) - offset
+        start_idx = end_idx - period_days - 1
+        window = bars[start_idx:end_idx]
+
+        gains = []
+        losses = []
+        for i in range(1, len(window)):
+            change = window[i].close.amount - window[i - 1].close.amount
+            if change > 0:
+                gains.append(change)
+                losses.append(Decimal(0))
+            else:
+                gains.append(Decimal(0))
+                losses.append(abs(change))
+
+        avg_gain = sum(gains) / len(gains)
+        avg_loss = sum(losses) / len(losses)
+
+        if avg_loss == 0:
+            return Decimal(100)
+
+        rs = avg_gain / avg_loss
+        rsi = Decimal(100) - (Decimal(100) / (1 + rs))
+        return rsi
+
+    def _compute_ema_series(self, period_days: int, values: list[Decimal]) -> list[Decimal]:
+        """Compute EMA series from a list of values. Returns list of EMA values same length as input."""
+        if len(values) < period_days:
+            return []
+        multiplier = Decimal(2) / (Decimal(period_days) + Decimal(1))
+        # Seed with SMA of first N values
+        sma = sum(values[:period_days]) / Decimal(period_days)
+        ema_values = [sma]
+        for price in values[period_days:]:
+            ema = (price - ema_values[-1]) * multiplier + ema_values[-1]
+            ema_values.append(ema)
+        return ema_values
+
+    def compute_ema(self, period_days: int, offset: int = 0) -> Money | None:
+        """Compute Exponential Moving Average over the given period."""
+        bars = self.bars
+        if len(bars) < period_days + offset:
+            return None
+
+        end_idx = len(bars) - offset
+        closes = [bar.close.amount for bar in bars[:end_idx]]
+        ema_series = self._compute_ema_series(period_days, closes)
+        if not ema_series:
+            return None
+        return Money(amount=ema_series[-1])
+
+    def compute_macd(self, offset: int = 0) -> tuple[Decimal, Decimal, Decimal] | None:
+        """Compute MACD line, signal line, and histogram. Uses EMA12/EMA26 for MACD, EMA9 for signal."""
+        bars = self.bars
+        # Need at least 26 bars for EMA26 + 9 for signal line + offset
+        needed = 26 + 9 + offset
+        if len(bars) < needed:
+            return None
+
+        end_idx = len(bars) - offset
+        closes = [bar.close.amount for bar in bars[:end_idx]]
+
+        ema12 = self._compute_ema_series(12, closes)
+        ema26 = self._compute_ema_series(26, closes)
+
+        if not ema12 or not ema26:
+            return None
+
+        # Align: EMA26 starts later, so trim EMA12 to match
+        offset_diff = len(ema12) - len(ema26)
+        ema12_aligned = ema12[offset_diff:]
+
+        macd_line_series = [e12 - e26 for e12, e26 in zip(ema12_aligned, ema26)]
+
+        signal_series = self._compute_ema_series(9, macd_line_series)
+        if not signal_series:
+            return None
+
+        macd_line = macd_line_series[-1]
+        signal_line = signal_series[-1]
+        histogram = macd_line - signal_line
+
+        return (macd_line, signal_line, histogram)
+
+    def compute_atr(self, period_days: int, offset: int = 0) -> Decimal | None:
+        """Compute Average True Range over the given period."""
+        bars = self.bars
+        needed = period_days + 1 + offset  # +1 for previous close
+        if len(bars) < needed:
+            return None
+
+        end_idx = len(bars) - offset
+        start_idx = end_idx - period_days - 1
+        window = bars[start_idx:end_idx]
+
+        true_ranges = []
+        for i in range(1, len(window)):
+            high = window[i].high.amount
+            low = window[i].low.amount
+            prev_close = window[i - 1].close.amount
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+            true_ranges.append(tr)
+
+        return sum(true_ranges) / len(true_ranges)
+
+    def compute_bollinger_band(self, upper: bool, period_days: int = 20, num_std: float = 2.0, offset: int = 0) -> Money | None:
+        """Compute upper or lower Bollinger Band."""
+        bars = self.bars
+        if len(bars) < period_days + offset:
+            return None
+
+        end_idx = len(bars) - offset
+        start_idx = end_idx - period_days
+        closes = [float(bar.close.amount) for bar in bars[start_idx:end_idx]]
+
+        ma = sum(closes) / len(closes)
+        sd = stdev(closes) if len(closes) > 1 else 0.0
+
+        if upper:
+            return Money(amount=Decimal(str(ma + num_std * sd)))
+        else:
+            return Money(amount=Decimal(str(ma - num_std * sd)))
+
+    def compute_percent_change(self, offset: int = 0) -> Decimal | None:
+        """Compute daily percent change in closing price."""
+        bars = self.bars
+        needed = 2 + offset
+        if len(bars) < needed:
+            return None
+
+        idx = len(bars) - 1 - offset
+        today = bars[idx].close.amount
+        yesterday = bars[idx - 1].close.amount
+
+        if yesterday == 0:
+            return None
+
+        return (today - yesterday) / yesterday * 100
 
     @model_validator(mode="after")
     def validate_fields(cls, values):

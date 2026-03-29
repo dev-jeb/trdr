@@ -33,3 +33,30 @@ uv run pytest src/trdr/path/to/test_file.py::TestClass::test_method
 - `src/trdr/dsl/`: Domain-specific language for strategy definition
 - `src/trdr/conftest.py`: pytest fixtures
 - `src/trdr/test_utils/`: Test utilities
+
+## DSL Keywords
+
+### Technical Indicators
+- **SMA**: `MA5`, `MA20`, `MA50`, `MA100`, `MA200`
+- **EMA**: `EMA5`, `EMA12`, `EMA20`, `EMA26`, `EMA50`
+- **RSI**: `RSI7`, `RSI14`, `RSI21` (0-100 scale)
+- **MACD**: `MACD_LINE`, `MACD_SIGNAL`, `MACD_HISTOGRAM`
+- **ATR**: `ATR14`
+- **Bollinger Bands**: `BBAND_UPPER`, `BBAND_LOWER` (20-period, 2 std dev)
+
+### Volume
+- **Average Volume**: `AV5`, `AV20`, `AV50`, `AV100`, `AV200`
+
+### Price Action
+- `CURRENT_PRICE`, `CURRENT_VOLUME`
+- `DAILY_HIGH`, `DAILY_LOW`
+- `PERCENT_CHANGE` (daily % change)
+
+### Account
+- `ACCOUNT_EXPOSURE`, `AVAILABLE_CASH`, `AVERAGE_COST`, `NUMBER_OF_OPEN_POSITIONS`
+
+### Operators
+- Crossovers: `CROSSED_ABOVE`, `CROSSED_BELOW` (MA identifiers only)
+- Logic: `ALL_OF`, `ANY_OF`
+- Comparison: `>`, `<`, `>=`, `<=`, `==`
+- Arithmetic: `+`, `-`, `*`, `/`
