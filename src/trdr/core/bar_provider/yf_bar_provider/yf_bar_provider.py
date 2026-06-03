@@ -2,6 +2,7 @@ from typing import List, Tuple, Optional
 from datetime import timedelta, timezone
 import asyncio
 import yfinance as yf
+import yfinance.shared  # noqa: F401  yfinance>=1.x no longer auto-binds yf.shared; import it so yf.shared._ERRORS resolves
 from decimal import Decimal
 import pandas as pd
 from opentelemetry import trace
@@ -141,6 +142,7 @@ class YFBarProvider(BaseBarProvider):
                         end=end_datetime,
                         group_by="ticker",
                         interval=Timeframe.d1.to_yf_interval(),
+                        progress=False,
                     )
 
                     batch_successful = batch.copy()
@@ -262,6 +264,7 @@ class YFBarProvider(BaseBarProvider):
                 period=Timeframe.d1.to_yf_interval(),
                 interval=Timeframe.m15.to_yf_interval(),
                 group_by="ticker",
+                progress=False,
             )
             span.add_event("current_bar_data_fetch_complete")
             if yf.shared._ERRORS:

@@ -301,15 +301,12 @@ class Security(BaseModel):
         return (today - yesterday) / yesterday * 100
 
     @model_validator(mode="after")
-    def validate_fields(cls, values):
+    def validate_fields(self) -> "Security":
         """Validates the security fields.
 
         Checks:
         - Symbol is a string
         - Current bar is a valid Bar object
-
-        Args:
-            values: The model instance being validated
 
         Returns:
             The validated model instance
@@ -317,18 +314,14 @@ class Security(BaseModel):
         Raises:
             ValueError: If any validation checks fail
         """
-        bars = values.bars
-        current_bar = values.current_bar
-        symbol = values.symbol
-
-        if not isinstance(symbol, str):
+        if not isinstance(self.symbol, str):
             raise ValueError("Symbol must be a string")
-        if not isinstance(bars, list):
+        if not isinstance(self.bars, list):
             raise ValueError("Bars must be a list")
-        if not isinstance(current_bar, Bar):
+        if not isinstance(self.current_bar, Bar):
             raise ValueError("Current bar must be a Bar object")
 
-        return values
+        return self
 
     def to_json(self) -> str:
         return self.model_dump_json(indent=2)

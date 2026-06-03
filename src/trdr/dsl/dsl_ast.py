@@ -2,10 +2,37 @@ from typing import List, Any, Optional, Union
 from decimal import Decimal
 from enum import Enum
 
+from opentelemetry import trace
+
 from ..core.trading_context.trading_context import TradingContext
 from ..core.shared.models import ContextIdentifier
 from ..core.broker.models import Money
 from .lexer import ReservedKeyword
+
+
+def _record_condition(
+    description: str,
+    result: Any,
+    left_val: Optional[Decimal] = None,
+    right_val: Optional[Decimal] = None,
+) -> None:
+    """
+    Attach a structured 'condition_evaluated' event to the active span so the
+    decision behind an entry/exit signal is visible in the trace backend.
+
+    Records the human-readable condition, the operand values (when numeric), and
+    the boolean outcome. A no-op when there is no recording span (e.g. tests,
+    NoOpTracer), so it is always safe to call.
+    """
+    span = trace.get_current_span()
+    if not span or not span.is_recording():
+        return
+    attributes: dict = {"condition": description, "result": bool(result)}
+    if left_val is not None:
+        attributes["left"] = float(left_val)
+    if right_val is not None:
+        attributes["right"] = float(right_val)
+    span.add_event("condition_evaluated", attributes=attributes)
 
 
 class BinaryOperator(Enum):
@@ -26,6 +53,14 @@ class BinaryOperator(Enum):
             if op.value == operator:
                 return op
         raise ValueError(f"Invalid binary operator: {operator}")
+
+
+# Operators that produce a boolean decision (as opposed to arithmetic). Only
+# these are recorded as conditions in the trace; arithmetic operators are
+# sub-expressions whose values surface via their parent comparison.
+COMPARISON_OPERATORS = frozenset(
+    {BinaryOperator.GREATER, BinaryOperator.LESS, BinaryOperator.EQUAL}
+)
 
 
 # A helper function for tree printing.
@@ -58,6 +93,10 @@ class Expression:
 
         raise NotImplementedError()
 
+    def describe(self) -> str:
+        """Compact, single-line, human-readable form (e.g. 'MA5 > MA20')."""
+        raise NotImplementedError()
+
     def to_pretty_string(self, indent: int = 0) -> str:
         raise NotImplementedError()
 
@@ -71,6 +110,9 @@ class Literal(Expression):
 
     async def evaluate(self, context: Optional[TradingContext]) -> Decimal:
         return Decimal(self.value)
+
+    def describe(self) -> str:
+        return str(self.value)
 
     def to_pretty_string(self, indent: int = 0) -> str:
         return tree_line("Literal", str(self.value), indent)
@@ -96,6 +138,11 @@ class Identifier(Expression):
         value = await context.get_value_for_identifier(self.context_identifier)
         return value
 
+    def describe(self) -> str:
+        if isinstance(self.context_identifier, ContextIdentifier):
+            return self.context_identifier.value
+        return str(self.context_identifier)
+
     def to_pretty_string(self, indent: int = 0) -> str:
         return tree_line("Identifier", str(self.context_identifier), indent)
 
@@ -118,11 +165,11 @@ class BinaryExpression(Expression):
         right_val = await self.right.evaluate(context)
 
         if self.operator == BinaryOperator.GREATER:
-            return left_val > right_val
+            result = left_val > right_val
         elif self.operator == BinaryOperator.LESS:
-            return left_val < right_val
+            result = left_val < right_val
         elif self.operator == BinaryOperator.EQUAL:
-            return left_val == right_val
+            result = left_val == right_val
         elif self.operator == BinaryOperator.PLUS:
             return left_val + right_val
         elif self.operator == BinaryOperator.MINUS:
@@ -133,6 +180,14 @@ class BinaryExpression(Expression):
             return left_val / right_val
         else:
             raise ValueError(f"Unsupported operator {self.operator}")
+
+        # Only comparisons are decisions worth tracing; arithmetic operands
+        # surface as the left/right values of their enclosing comparison.
+        _record_condition(self.describe(), result, left_val, right_val)
+        return result
+
+    def describe(self) -> str:
+        return f"{self.left.describe()} {self.operator.value} {self.right.describe()}"
 
     def to_pretty_string(self, indent: int = 0) -> str:
         base = "    " * indent
@@ -199,11 +254,18 @@ class CrossoverExpression(Expression):
 
         # Call appropriate method based on operator
         if self.operator == ReservedKeyword.CROSSED_ABOVE:
-            return context.current_security.has_bullish_moving_average_crossover(left_timeframe, right_timeframe)
+            result = context.current_security.has_bullish_moving_average_crossover(left_timeframe, right_timeframe)
         elif self.operator == ReservedKeyword.CROSSED_BELOW:
-            return context.current_security.has_bearish_moving_average_crossover(left_timeframe, right_timeframe)
+            result = context.current_security.has_bearish_moving_average_crossover(left_timeframe, right_timeframe)
         else:
             raise ValueError(f"Unsupported crossover operator {self.operator}")
+
+        _record_condition(self.describe(), result)
+        return result
+
+    def describe(self) -> str:
+        op = self.operator.value if isinstance(self.operator, ReservedKeyword) else str(self.operator)
+        return f"{self.left.describe()} {op} {self.right.describe()}"
 
     def to_pretty_string(self, indent: int = 0) -> str:
         base = "    " * indent
@@ -243,7 +305,23 @@ class AllOf(Expression):
 
         # First gather all results, then check if all are true
         results = [await condition.evaluate(context) for condition in self.conditions]
-        return all(results)
+        outcome = all(results)
+        span = trace.get_current_span()
+        if span and span.is_recording():
+            failed = [self.conditions[i].describe() for i, r in enumerate(results) if not r]
+            span.add_event(
+                "all_of_evaluated",
+                attributes={
+                    "result": outcome,
+                    "passed": sum(1 for r in results if r),
+                    "total": len(results),
+                    "failed_conditions": failed,
+                },
+            )
+        return outcome
+
+    def describe(self) -> str:
+        return "ALL_OF[" + ", ".join(c.describe() for c in self.conditions) + "]"
 
     def to_pretty_string(self, indent: int = 0) -> str:
         base = "    " * indent
@@ -264,7 +342,23 @@ class AnyOf(Expression):
         if not context:
             raise ValueError("Context is required for any of evaluation")
         results = [await condition.evaluate(context) for condition in self.conditions]
-        return any(results)
+        outcome = any(results)
+        span = trace.get_current_span()
+        if span and span.is_recording():
+            passed = [self.conditions[i].describe() for i, r in enumerate(results) if r]
+            span.add_event(
+                "any_of_evaluated",
+                attributes={
+                    "result": outcome,
+                    "passed": sum(1 for r in results if r),
+                    "total": len(results),
+                    "passed_conditions": passed,
+                },
+            )
+        return outcome
+
+    def describe(self) -> str:
+        return "ANY_OF[" + ", ".join(c.describe() for c in self.conditions) + "]"
 
     def to_pretty_string(self, indent: int = 0) -> str:
         base = "    " * indent

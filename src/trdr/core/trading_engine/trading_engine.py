@@ -6,8 +6,15 @@ from datetime import datetime
 
 from ...dsl.dsl_loader import StrategyDSLLoader
 from ..broker.models import OrderSide, Order, OrderStatus, OrderType
+from ..broker.exceptions import InsufficientFundsException
+from ..broker.pdt.exceptions import PDTRuleViolationException
 from ..trading_context.trading_context import TradingContext
 from ..trading_context.exceptions import MissingContextValue
+
+# Order rejections that are an expected per-security outcome, not a run-fatal
+# error. Caught so one rejected ticker does not blind us to the rest of the
+# universe; the reason is recorded on the security span instead.
+ORDER_REJECTIONS = (InsufficientFundsException, PDTRuleViolationException)
 from ..shared.models import TradingDateTime
 
 T = TypeVar("T", bound="TradingEngine")
@@ -126,6 +133,7 @@ class TradingEngine:
                 skipped_count = 0
                 exit_signals = 0
                 entry_signals = 0
+                rejected_count = 0
 
                 while await self.trading_context.next_symbol():
                     with self._tracer.start_as_current_span("Strategy.process_security") as security_span:
@@ -164,8 +172,19 @@ class TradingEngine:
                                     )
 
                                     security_span.add_event("placing_sell_order")
-                                    await self.trading_context.broker.place_order(order)
-                                    exit_signals += 1
+                                    try:
+                                        await self.trading_context.broker.place_order(order)
+                                        exit_signals += 1
+                                    except ORDER_REJECTIONS as e:
+                                        security_span.add_event(
+                                            "order_rejected",
+                                            attributes={
+                                                "side": "SELL",
+                                                "reason": type(e).__name__,
+                                                "detail": str(e),
+                                            },
+                                        )
+                                        rejected_count += 1
 
                             except MissingContextValue:
                                 security_span.add_event("missing_context_value_for_exit")
@@ -202,8 +221,19 @@ class TradingEngine:
                                     )
 
                                     security_span.add_event("placing_buy_order")
-                                    await self.trading_context.broker.place_order(order)
-                                    entry_signals += 1
+                                    try:
+                                        await self.trading_context.broker.place_order(order)
+                                        entry_signals += 1
+                                    except ORDER_REJECTIONS as e:
+                                        security_span.add_event(
+                                            "order_rejected",
+                                            attributes={
+                                                "side": "BUY",
+                                                "reason": type(e).__name__,
+                                                "detail": str(e),
+                                            },
+                                        )
+                                        rejected_count += 1
 
                             except MissingContextValue:
                                 security_span.add_event("missing_context_value_for_entry")
@@ -217,6 +247,7 @@ class TradingEngine:
                 span.set_attribute("securities.skipped", skipped_count)
                 span.set_attribute("signals.exit", exit_signals)
                 span.set_attribute("signals.entry", entry_signals)
+                span.set_attribute("orders.rejected", rejected_count)
                 span.set_status(trace.StatusCode.OK)
 
             except Exception as e:

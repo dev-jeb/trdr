@@ -1,9 +1,19 @@
-import asyncio
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+"""
+Run a strategy locally with tracing exported to an OTLP backend.
 
+Set these before running (example uses Honeycomb; any OTLP backend works):
+
+    export OTEL_SERVICE_NAME=trdr
+    export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.honeycomb.io
+    export OTEL_EXPORTER_OTLP_HEADERS=x-honeycomb-team=YOUR_INGEST_KEY
+
+If no endpoint is set, tracing is a no-op (nothing exported). Pass console=True
+to also print spans to stdout for quick local inspection.
+"""
+
+import asyncio
+
+from trdr.telemetry import configure_tracing, shutdown_tracing
 from trdr.core.bar_provider.yf_bar_provider.yf_bar_provider import YFBarProvider
 from trdr.core.security_provider.security_provider import SecurityProvider
 from trdr.core.broker.mock_broker.mock_broker import MockBroker
@@ -14,15 +24,7 @@ from trdr.core.broker.pdt.nun_strategy import NunStrategy
 if __name__ == "__main__":
 
     async def main():
-        tracer_provider = TracerProvider()
-        """
-        I run the collector as a container locally for testing purposes.
-        """
-        otlp_exporter = OTLPSpanExporter(endpoint="localhost:4317", insecure=True)
-        span_processor = BatchSpanProcessor(otlp_exporter, max_export_batch_size=20)
-        tracer_provider.add_span_processor(span_processor)
-        trace.set_tracer_provider(tracer_provider)
-        tracer = trace.get_tracer("trdr")
+        tracer = configure_tracing(console=True)
         try:
             pdt_strategy = NunStrategy.create(tracer)
             async with await MockBroker.create(pdt_strategy, tracer) as broker:
@@ -33,8 +35,9 @@ if __name__ == "__main__":
                     "first-strat", context, strategies_dir="../strategies", tracer=tracer
                 )
                 await engine.execute()
-
         except Exception as e:
             print(e)
+        finally:
+            shutdown_tracing()
 
     asyncio.run(main())

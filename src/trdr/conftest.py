@@ -1,6 +1,7 @@
 import asyncio
 import pytest
 import yfinance as yf
+import yfinance.shared  # noqa: F401  ensures yf.shared is bound for the monkeypatch below
 import random
 import datetime
 

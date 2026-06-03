@@ -12,6 +12,7 @@ from ..shared.models import Money, TradingDateTime
 from .pdt.base_pdt_strategy import BasePDTStrategy
 from .pdt.models import PDTContext
 from .pdt.exceptions import PDTRuleViolationException
+from .exceptions import InsufficientFundsException
 
 T = TypeVar("T", bound="BaseBroker")
 
@@ -233,6 +234,13 @@ class BaseBroker(ABC):
         and then marks the state as stale.
         """
         with self._tracer.start_as_current_span("BaseBroker.place_order") as span:
+            span.set_attribute("order.symbol", order.symbol)
+            span.set_attribute("order.side", str(order.side))
+            span.set_attribute("order.quantity_requested", float(order.quantity_requested))
+            span.set_attribute("order.current_price", float(order.current_price.amount))
+            span.set_attribute(
+                "order.estimated_cost", float(order.quantity_requested * order.current_price.amount)
+            )
             await self._stale_handler()
 
             await self._validate_pre_order(order)
@@ -274,18 +282,34 @@ class BaseBroker(ABC):
         we dont need to check pdt rules if cash is over 25k. However, if this trade puts us below 25k, we need to check pdt rules.
         """
         with self._tracer.start_as_current_span("BaseBroker._validate_pre_order") as span:
-            if (order.quantity_requested * order.current_price.amount) > self._cash.amount:
-                raise ValueError("Insufficient cash to place order")
-            if not (self._cash.amount - order.quantity_requested * order.current_price.amount) < 25000:
-                span.add_event("cash is over 25k, skipping pdt rules")
+            order_cost = order.quantity_requested * order.current_price.amount
+            span.set_attribute("order.symbol", order.symbol)
+            span.set_attribute("order.estimated_cost", float(order_cost))
+            span.set_attribute("cash_available", float(self._cash.amount))
+
+            if order_cost > self._cash.amount:
+                # "Wanted to trade but couldn't": surface the shortfall, not just an exception.
+                span.add_event(
+                    "order_rejected",
+                    attributes={
+                        "reason": "insufficient_cash",
+                        "cash_available": float(self._cash.amount),
+                        "order_cost": float(order_cost),
+                        "shortfall": float(order_cost - self._cash.amount),
+                    },
+                )
+                span.set_status(trace.StatusCode.ERROR)
+                e = InsufficientFundsException("Insufficient cash to place order")
+                span.record_exception(e)
+                raise e
+            if not (self._cash.amount - order_cost) < 25000:
+                span.add_event("order_allowed", attributes={"reason": "cash_over_25k_pdt_skipped"})
                 span.set_status(trace.StatusCode.OK)
                 return
-            span.add_event(
-                "checking pdt rules. cash after order: {}".format(
-                    self._cash.amount - order.quantity_requested * order.current_price.amount
-                )
-            )
+            span.add_event("checking pdt rules. cash after order: {}".format(self._cash.amount - order_cost))
             count_of_positions_opened_today = await self.get_count_of_positions_opened_today()
+            span.set_attribute("pdt.rolling_day_trade_count", self._day_trade_count)
+            span.set_attribute("pdt.positions_opened_today", count_of_positions_opened_today)
             context = PDTContext(
                 order=order,
                 position=self._positions.get(order.symbol, None),
@@ -299,8 +323,22 @@ class BaseBroker(ABC):
             # Process the decision
             if not decision.allowed:
                 reason = decision.reason or "PDT restrictions prevent this order"
-                raise PDTRuleViolationException(reason)
+                span.add_event(
+                    "order_rejected",
+                    attributes={
+                        "reason": "pdt_rule_violation",
+                        "detail": reason,
+                        "rolling_day_trade_count": self._day_trade_count,
+                        "positions_opened_today": count_of_positions_opened_today,
+                    },
+                )
+                span.set_status(trace.StatusCode.ERROR)
+                e = PDTRuleViolationException(reason)
+                span.record_exception(e)
+                raise e
 
+            span.add_event("order_allowed", attributes={"reason": "pdt_check_passed"})
+            span.set_status(trace.StatusCode.OK)
             # Additional common verifications can be incorporated here
 
     def _clear_current_state(self) -> None:
