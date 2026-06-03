@@ -121,7 +121,14 @@ class YFBarProvider(BaseBarProvider):
 
                 if attempt > 0:
                     delay = 5 * attempt
-                    span.add_event(f"retry attempt {attempt}, waiting {delay}s for {len(remaining_symbols)} symbols")
+                    span.add_event(
+                        "retry_attempt",
+                        attributes={
+                            "attempt": attempt,
+                            "delay_seconds": delay,
+                            "remaining_symbols": len(remaining_symbols),
+                        },
+                    )
                     await asyncio.sleep(delay)
 
                 batches = [
@@ -134,7 +141,14 @@ class YFBarProvider(BaseBarProvider):
                     if batch_idx > 0:
                         await asyncio.sleep(2)
 
-                    span.add_event(f"fetching batch {batch_idx + 1}/{len(batches)}: {len(batch)} symbols")
+                    span.add_event(
+                        "fetching_batch",
+                        attributes={
+                            "batch_index": batch_idx + 1,
+                            "batch_count": len(batches),
+                            "batch_size": len(batch),
+                        },
+                    )
                     yf.shared._ERRORS = {}
                     data = yf.download(
                         batch,
@@ -186,7 +200,7 @@ class YFBarProvider(BaseBarProvider):
 
                 remaining_symbols = rate_limited_symbols
                 if rate_limited_symbols:
-                    span.add_event(f"{len(rate_limited_symbols)} symbols rate limited")
+                    span.add_event("symbols_rate_limited", attributes={"count": len(rate_limited_symbols)})
 
             yf.shared._ERRORS = {}
 

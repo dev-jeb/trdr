@@ -306,7 +306,7 @@ class BaseBroker(ABC):
                 span.add_event("order_allowed", attributes={"reason": "cash_over_25k_pdt_skipped"})
                 span.set_status(trace.StatusCode.OK)
                 return
-            span.add_event("checking pdt rules. cash after order: {}".format(self._cash.amount - order_cost))
+            span.add_event("pdt_check", attributes={"cash_after_order": float(self._cash.amount - order_cost)})
             count_of_positions_opened_today = await self.get_count_of_positions_opened_today()
             span.set_attribute("pdt.rolling_day_trade_count", self._day_trade_count)
             span.set_attribute("pdt.positions_opened_today", count_of_positions_opened_today)

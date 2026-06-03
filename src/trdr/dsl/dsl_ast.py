@@ -15,14 +15,15 @@ def _record_condition(
     result: Any,
     left_val: Optional[Decimal] = None,
     right_val: Optional[Decimal] = None,
+    symbol: Optional[str] = None,
 ) -> None:
     """
     Attach a structured 'condition_evaluated' event to the active span so the
     decision behind an entry/exit signal is visible in the trace backend.
 
-    Records the human-readable condition, the operand values (when numeric), and
-    the boolean outcome. A no-op when there is no recording span (e.g. tests,
-    NoOpTracer), so it is always safe to call.
+    Records the human-readable condition, the operand values (when numeric), the
+    symbol it was evaluated for, and the boolean outcome. A no-op when there is no
+    recording span (e.g. tests, NoOpTracer), so it is always safe to call.
     """
     span = trace.get_current_span()
     if not span or not span.is_recording():
@@ -32,7 +33,14 @@ def _record_condition(
         attributes["left"] = float(left_val)
     if right_val is not None:
         attributes["right"] = float(right_val)
+    if symbol is not None:
+        attributes["symbol"] = symbol
     span.add_event("condition_evaluated", attributes=attributes)
+
+
+def _symbol_of(context: Any) -> Optional[str]:
+    """Best-effort current symbol from the context; None in tests / partial contexts."""
+    return getattr(context, "current_symbol", None)
 
 
 class BinaryOperator(Enum):
@@ -183,7 +191,7 @@ class BinaryExpression(Expression):
 
         # Only comparisons are decisions worth tracing; arithmetic operands
         # surface as the left/right values of their enclosing comparison.
-        _record_condition(self.describe(), result, left_val, right_val)
+        _record_condition(self.describe(), result, left_val, right_val, symbol=_symbol_of(context))
         return result
 
     def describe(self) -> str:
@@ -260,7 +268,7 @@ class CrossoverExpression(Expression):
         else:
             raise ValueError(f"Unsupported crossover operator {self.operator}")
 
-        _record_condition(self.describe(), result)
+        _record_condition(self.describe(), result, symbol=_symbol_of(context))
         return result
 
     def describe(self) -> str:
@@ -309,15 +317,16 @@ class AllOf(Expression):
         span = trace.get_current_span()
         if span and span.is_recording():
             failed = [self.conditions[i].describe() for i, r in enumerate(results) if not r]
-            span.add_event(
-                "all_of_evaluated",
-                attributes={
-                    "result": outcome,
-                    "passed": sum(1 for r in results if r),
-                    "total": len(results),
-                    "failed_conditions": failed,
-                },
-            )
+            attributes = {
+                "result": outcome,
+                "passed": sum(1 for r in results if r),
+                "total": len(results),
+                "failed_conditions": failed,
+            }
+            symbol = _symbol_of(context)
+            if symbol is not None:
+                attributes["symbol"] = symbol
+            span.add_event("all_of_evaluated", attributes=attributes)
         return outcome
 
     def describe(self) -> str:
@@ -346,15 +355,16 @@ class AnyOf(Expression):
         span = trace.get_current_span()
         if span and span.is_recording():
             passed = [self.conditions[i].describe() for i, r in enumerate(results) if r]
-            span.add_event(
-                "any_of_evaluated",
-                attributes={
-                    "result": outcome,
-                    "passed": sum(1 for r in results if r),
-                    "total": len(results),
-                    "passed_conditions": passed,
-                },
-            )
+            attributes = {
+                "result": outcome,
+                "passed": sum(1 for r in results if r),
+                "total": len(results),
+                "passed_conditions": passed,
+            }
+            symbol = _symbol_of(context)
+            if symbol is not None:
+                attributes["symbol"] = symbol
+            span.add_event("any_of_evaluated", attributes=attributes)
         return outcome
 
     def describe(self) -> str:

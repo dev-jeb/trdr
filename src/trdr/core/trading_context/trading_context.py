@@ -179,7 +179,25 @@ class TradingContext:
                 span.record_exception(error)
                 raise error
 
-            match identifier:
+            span.set_attribute(
+                "identifier",
+                identifier.value if isinstance(identifier, ContextIdentifier) else str(identifier),
+            )
+            span.set_attribute("symbol", self.current_symbol)
+            value = await self._resolve_identifier_value(identifier, span)
+            try:
+                span.set_attribute("value", float(value))
+            except (TypeError, ValueError):
+                pass
+            return value
+
+    async def _resolve_identifier_value(self, identifier: ContextIdentifier, span) -> Decimal:
+        """Resolve the raw value for ``identifier``.
+
+        ``span`` is passed only so not-available cases can record an event; the
+        identifier/symbol/value attribute tagging lives in the public wrapper.
+        """
+        match identifier:
 
                 case ContextIdentifier.MA5:
                     moving_average = self.current_security.compute_moving_average(Timeframe.d5)

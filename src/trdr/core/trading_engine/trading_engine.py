@@ -257,6 +257,14 @@ class TradingEngine:
                 span.set_attribute("orders.rejected", rejected_count)
                 span.set_status(trace.StatusCode.OK)
 
+                return {
+                    "processed": processed_count,
+                    "skipped": skipped_count,
+                    "entry": entry_signals,
+                    "exit": exit_signals,
+                    "rejected": rejected_count,
+                }
+
             except Exception as e:
                 span.record_exception(e)
                 span.set_status(trace.StatusCode.ERROR)

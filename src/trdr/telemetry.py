@@ -31,6 +31,7 @@ the trace is lost. See ``examples/lambda/handler.py``.
 """
 
 import os
+from importlib.metadata import PackageNotFoundError, version
 from typing import Optional
 
 from opentelemetry import trace
@@ -43,6 +44,14 @@ from opentelemetry.sdk.trace.export import (
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
 _provider: Optional[TracerProvider] = None
+
+
+def _trdr_version() -> str:
+    """Installed trdr version, so spans are segmentable by release (before/after a deploy)."""
+    try:
+        return version("trdr")
+    except PackageNotFoundError:
+        return "unknown"
 
 
 def _otlp_endpoint_configured() -> bool:
@@ -74,7 +83,10 @@ def configure_tracing(
     global _provider
 
     service_name = service_name or os.getenv("OTEL_SERVICE_NAME", "trdr")
-    resource = Resource.create({"service.name": service_name})
+    # service.version is stamped automatically; deployment.environment (and any
+    # other deploy metadata) can be supplied via the OTEL_RESOURCE_ATTRIBUTES env
+    # var, which Resource.create merges in. Explicit attributes here win on conflict.
+    resource = Resource.create({"service.name": service_name, "service.version": _trdr_version()})
     provider = TracerProvider(resource=resource)
 
     if _otlp_endpoint_configured():

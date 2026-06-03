@@ -2,6 +2,29 @@
 
 All notable changes to `trdr` are documented here.
 
+## 0.0.8
+
+Instrumentation quality pass (informed by reviewing the actual spans in Honeycomb).
+
+### Changed
+- **`service.version` is now stamped on every span** (read from the installed trdr
+  package), and `deployment.environment` (plus any other deploy metadata) can be set via
+  the standard `OTEL_RESOURCE_ATTRIBUTES` env var. Spans are now segmentable by release
+  and environment — e.g. comparing behavior before/after a deploy.
+- **`get_value_for_identifier` spans are now useful.** They were emitted ~6×/security with
+  *no* attributes (couldn't tell which identifier or what value). They now carry
+  `identifier`, `symbol`, and the resolved `value`.
+- **Decision events carry `symbol`.** `condition_evaluated` / `all_of_evaluated` /
+  `any_of_evaluated` now include the symbol, so failures can be broken down per-ticker
+  without a parent-span join.
+- **Stable event names + attributes** instead of data baked into event-name strings:
+  `pdt_check` (`cash_after_order`), `fetching_batch` (`batch_index`/`batch_count`/`batch_size`),
+  `retry_attempt` (`attempt`/`delay_seconds`/`remaining_symbols`), `symbols_rate_limited`
+  (`count`). Previously each distinct value created a new un-aggregatable "span" name.
+- **`TradingEngine.execute` now returns its run counts** (`processed`/`skipped`/`entry`/
+  `exit`/`rejected`) so callers can roll them up onto a parent/root span. Additive —
+  existing callers that ignore the return value are unaffected.
+
 ## 0.0.7
 
 ### Fixed
