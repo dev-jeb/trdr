@@ -403,6 +403,15 @@ class SizingRule:
         return "\n".join(lines)
 
 
+class NoSizingRuleMatched(Exception):
+    """Raised when no SIZING rule's condition holds for the current context.
+
+    This is an expected per-security outcome (e.g. fully invested / over the
+    exposure cap), not a run-fatal error — the engine catches it and simply
+    skips entering that one name.
+    """
+
+
 class Sizing(Expression):
     def __init__(self, rules: List[SizingRule]):
         self.rules = rules
@@ -411,10 +420,12 @@ class Sizing(Expression):
         if not context:
             raise ValueError("Context is required for sizing evaluation")
         for rule in self.rules:
-            result = await rule.condition.evaluate(context)
-            if rule.condition is None or result:
+            # A rule with no condition is an unconditional default — it always
+            # matches. Check that first so we never dereference a None condition
+            # (the `or` short-circuits before evaluating it).
+            if rule.condition is None or await rule.condition.evaluate(context):
                 return await rule.value.evaluate(context)
-        raise ValueError("No sizing rule matched the context.")
+        raise NoSizingRuleMatched("No sizing rule matched the context.")
 
     def to_pretty_string(self, indent: int = 0) -> str:
         base = "    " * indent

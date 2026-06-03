@@ -7,6 +7,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from .trading_engine import TradingEngine
 from ..broker.exceptions import InsufficientFundsException
+from ...dsl.dsl_ast import NoSizingRuleMatched
 
 
 class _AlwaysEnterAST:
@@ -63,3 +64,28 @@ def test_order_rejection_does_not_abort_run(mock_trading_context):
     execute_span = next(s for s in spans if s.name == "TradingEngine.execute")
     assert execute_span.attributes["orders.rejected"] == 2
     assert execute_span.attributes["signals.entry"] == 0
+
+
+def test_no_sizing_rule_match_does_not_abort_run(mock_trading_context):
+    """If sizing finds no matching rule on one security, skip just that entry — not the run."""
+
+    class _EnterButUnsizableAST(_AlwaysEnterAST):
+        async def evaluate_sizing(self, context):
+            raise NoSizingRuleMatched("No sizing rule matched the context.")
+
+    engine, exporter = _engine_with_inmemory_tracer(mock_trading_context)
+    engine.strategy_ast = _EnterButUnsizableAST()
+
+    # Must complete without raising despite every entry being unsizable.
+    asyncio.run(engine.execute())
+
+    spans = exporter.get_finished_spans()
+    security_spans = [s for s in spans if s.name == "Strategy.process_security"]
+    assert len(security_spans) == 2  # both symbols reached; run not aborted
+
+    skip_events = [e for s in security_spans for e in s.events if e.name == "entry_skipped_no_sizing_rule"]
+    assert len(skip_events) == 2
+
+    execute_span = next(s for s in spans if s.name == "TradingEngine.execute")
+    assert execute_span.attributes["signals.entry"] == 0
+    assert execute_span.attributes["securities.skipped"] == 2

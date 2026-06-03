@@ -295,15 +295,30 @@ class YFBarProvider(BaseBarProvider):
 
             try:
                 symbol_data = data.xs(symbol, level=0, axis=1)
-                bars = self._convert_df_to_bars(symbol, symbol_data)
-                most_recent_bar = bars[-1]
-                most_recent_bar.trading_datetime = TradingDateTime.now()
+                intraday_bars = self._convert_df_to_bars(symbol, symbol_data)
+                # Aggregate the day's intraday (15-min) candles into a single "current day
+                # so far" bar. close = the latest 15-min close (a fresh proxy for the live
+                # price, so CURRENT_PRICE stays current), while volume = the accumulated
+                # session volume — summed across every candle we have today — so that
+                # CURRENT_VOLUME is unit-comparable to the daily AV* averages it is measured
+                # against. (Previously only bars[-1] was kept, comparing ~15 minutes of
+                # volume to a full-day average, which was effectively never true.)
+                current_bar = Bar(
+                    trading_datetime=TradingDateTime.now(),
+                    open=intraday_bars[0].open,
+                    high=Money(amount=max(b.high.amount for b in intraday_bars)),
+                    low=Money(amount=min(b.low.amount for b in intraday_bars)),
+                    close=intraday_bars[-1].close,
+                    volume=sum(b.volume for b in intraday_bars),
+                )
+                span.set_attribute("intraday_candles_aggregated", len(intraday_bars))
+                span.set_attribute("accumulated_session_volume", current_bar.volume)
             except Exception as e:
                 span.set_status(trace.Status(trace.StatusCode.ERROR))
                 raise e
             else:
                 span.set_status(trace.Status(trace.StatusCode.OK))
-                return most_recent_bar
+                return current_bar
 
     async def get_bars(
         self,

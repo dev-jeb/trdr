@@ -5,6 +5,7 @@ from opentelemetry import trace
 from datetime import datetime
 
 from ...dsl.dsl_loader import StrategyDSLLoader
+from ...dsl.dsl_ast import NoSizingRuleMatched
 from ..broker.models import OrderSide, Order, OrderStatus, OrderType
 from ..broker.exceptions import InsufficientFundsException
 from ..broker.pdt.exceptions import PDTRuleViolationException
@@ -237,6 +238,12 @@ class TradingEngine:
 
                             except MissingContextValue:
                                 security_span.add_event("missing_context_value_for_entry")
+                                skipped_count += 1
+                                continue
+                            except NoSizingRuleMatched:
+                                # No sizing rule applied (e.g. over exposure cap): skip this
+                                # one entry, but let exits and the rest of the universe run.
+                                security_span.add_event("entry_skipped_no_sizing_rule")
                                 skipped_count += 1
                                 continue
 

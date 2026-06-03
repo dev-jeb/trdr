@@ -75,3 +75,18 @@ def test_get_current_bar_throws_exception_when_data_source_returns_error(monkeyp
         yf_bar_provider = asyncio.run(YFBarProvider.create(["ABCDEFG"]))
         monkeypatch.setattr(yf.shared, "_ERRORS", {"ABCDEFG": "RandomYFError()"})
         bar = asyncio.run(yf_bar_provider.get_current_bar("ABCDEFG"))
+
+
+def test_get_current_bar_aggregates_intraday_candles_into_session_volume(yf_bar_provider_with_fake_data):
+    # fake_yf_download returns 5 AAPL candles: Open 100..104, High 110..114,
+    # Low 90..94, Close 105..109, Volume 1000,1100,1200,1300,1400.
+    bar = asyncio.run(yf_bar_provider_with_fake_data.get_current_bar("AAPL"))
+
+    # close = latest candle's close (fresh price proxy)
+    assert bar.close.amount == 109
+    # volume = accumulated session volume (sum of every candle), not just the last one
+    assert bar.volume == 1000 + 1100 + 1200 + 1300 + 1400
+    # open = first candle's open; high/low = session extremes
+    assert bar.open.amount == 100
+    assert bar.high.amount == 114
+    assert bar.low.amount == 90
