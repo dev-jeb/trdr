@@ -138,9 +138,7 @@ class TradingEngine:
 
                 while await self.trading_context.next_symbol():
                     with self._tracer.start_as_current_span("Strategy.process_security") as security_span:
-                        security_span.set_attribute(
-                            "trading_context.current_symbol", self.trading_context.current_symbol
-                        )
+                        security_span.set_attribute("symbol", self.trading_context.current_symbol)
                         security_span.set_attribute("strategy_name", self.strategy_file_name)
 
                         # Determine this strategy's share count in the current position

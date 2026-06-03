@@ -8,7 +8,10 @@ TRDR is a framework for algorithmic trading in Python. It features a custom Doma
 - **Modular Architecture**: Easily swap components like brokers and data providers
 - **Async First**: Built from the ground up with Python's async/await pattern
 - **Mock Trading**: Test strategies with a mock broker before using real money
-- **Telemetry Integration**: Optional OpenTelemetry support for performance monitoring
+- **Decision-level observability**: First-class OpenTelemetry tracing that records *why* a
+  trade did or didn't happen — every entry/exit condition with its operands and result, and
+  every order rejection with its reason. Export to any OTLP backend (Honeycomb, Grafana
+  Tempo, etc.) with a single env var. See [Observability](#-observability).
 - **Pattern Day Trading Controls**: Built-in [PDT rule compliance strategies](src/trdr/core/broker/pdt/README.md) (NunStrategy, WiggleStrategy, YoloStrategy)
 
 ## 📦 Installation
@@ -77,6 +80,49 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+## 🔭 Observability
+
+The trading engine is fully instrumented with OpenTelemetry, so you can answer questions like
+*"why didn't we buy AAPL today?"* directly from your traces instead of guessing.
+
+Each run produces a span tree where every security records the entry/exit decision, and each
+DSL condition emits an event with its operands and result:
+
+- `condition_evaluated` — one per comparison/crossover, with `condition`, `left`, `right`,
+  `result`, and `symbol`
+- `all_of_evaluated` / `any_of_evaluated` — which conditions passed/failed
+- `order_rejected` / `order_allowed` — order outcomes with the numbers behind them
+  (cash shortfall, PDT counts)
+- `TradingEngine.execute` carries per-run counts (`signals.entry`, `orders.rejected`, …)
+
+Every span is stamped with `service.version` (so you can compare behavior across releases)
+and, via `OTEL_RESOURCE_ATTRIBUTES`, `deployment.environment`.
+
+### Enabling it
+
+Tracing is configured from standard `OTEL_*` environment variables, so the backend is pure
+configuration — no code change to switch vendors. With no endpoint set, it's a no-op.
+
+```bash
+export OTEL_SERVICE_NAME=trdr
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.honeycomb.io   # any OTLP backend
+export OTEL_EXPORTER_OTLP_HEADERS="x-honeycomb-team=YOUR_KEY"
+export OTEL_RESOURCE_ATTRIBUTES="deployment.environment=local"
+```
+
+```python
+from trdr.telemetry import configure_tracing, flush_tracing, shutdown_tracing
+
+tracer = configure_tracing()  # reads the env vars above; returns a tracer
+# ... pass `tracer` into the components (see examples/with_telemetry) ...
+shutdown_tracing()            # flush + tear down for a normal process
+```
+
+**AWS Lambda:** configure the tracer once at module scope and call `flush_tracing()` before
+the handler returns — otherwise the runtime freezes before the batched spans export. A
+complete handler is in [`examples/lambda/handler.py`](examples/lambda/handler.py). The HTTP
+OTLP exporter is used so it survives the Lambda freeze/thaw lifecycle.
+
 ## 🛠️ Architecture
 
 TRDR is built with a modular, component-based architecture:
@@ -118,11 +164,19 @@ ANY_OF          # Any condition can be true
 ### Technical Indicators
 
 ```
-MA{period}      # Moving average (e.g., MA5, MA20, MA50, MA100, MA200)
-AV{period}      # Average volume (e.g., AV5, AV20, AV50, AV100, AV200)
+MA{period}      # Simple moving average:  MA5, MA20, MA50, MA100, MA200
+EMA{period}     # Exponential moving avg:  EMA5, EMA12, EMA20, EMA26, EMA50
+AV{period}      # Average (daily) volume:  AV5, AV20, AV50, AV100, AV200
+RSI{period}     # Relative strength index (0-100):  RSI7, RSI14, RSI21
+MACD_LINE       # MACD line, signal line, and histogram
+MACD_SIGNAL
+MACD_HISTOGRAM
+ATR14           # Average true range (14-period)
+BBAND_UPPER     # Bollinger Bands (20-period, 2 std dev)
+BBAND_LOWER
 ```
 
-### Comparison Operators
+### Comparison & Crossover Operators
 
 ```
 >               # Greater than
@@ -130,15 +184,18 @@ AV{period}      # Average volume (e.g., AV5, AV20, AV50, AV100, AV200)
 >=              # Greater than or equal to
 <=              # Less than or equal to
 ==              # Equal to
-CROSSED_ABOVE   # Indicator crossed above another
-CROSSED_BELOW   # Indicator crossed below another
+CROSSED_ABOVE   # One moving average crossed above another (MA identifiers only)
+CROSSED_BELOW   # One moving average crossed below another (MA identifiers only)
 ```
 
 ### Price Metrics
 
 ```
-CURRENT_PRICE   # Current price of the security
-CURRENT_VOLUME  # Current volume of the security
+CURRENT_PRICE   # Latest price (most recent intraday close)
+CURRENT_VOLUME  # Accumulated volume so far in the current session
+DAILY_HIGH      # Session high
+DAILY_LOW       # Session low
+PERCENT_CHANGE  # Daily percent change
 ```
 
 ### Account Metrics
@@ -164,9 +221,10 @@ NUMBER_OF_OPEN_POSITIONS # Number of currently open positions
 
 Check the `examples/` directory for complete examples:
 
-- **No Telemetry Example**: Basic usage without OpenTelemetry
-- **With Telemetry Example**: Using OpenTelemetry for monitoring
-- **Strategy Examples**: Sample trading strategies
+- **[`no_telemetry/`](examples/no_telemetry/script.py)**: Basic usage, no tracing
+- **[`with_telemetry/`](examples/with_telemetry/script.py)**: Tracing via `configure_tracing`, exported to an OTLP backend
+- **[`lambda/`](examples/lambda/handler.py)**: Scheduled AWS Lambda entrypoint with the required `flush_tracing()` pattern
+- **[`strategies/`](examples/strategies/)**: Sample `.trdr` strategy files
 
 ## 🧪 Testing
 

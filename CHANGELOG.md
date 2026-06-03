@@ -2,6 +2,15 @@
 
 All notable changes to `trdr` are documented here.
 
+## 0.0.9
+
+### Changed
+- **One canonical `symbol` column.** `Strategy.process_security` previously tagged the
+  ticker as `trading_context.current_symbol` — the only span using that verbose name. It now
+  uses `symbol`, matching every other span/event (`condition_evaluated`,
+  `get_value_for_identifier`, bar provider, security provider). A single `symbol` filter now
+  covers the whole trace.
+
 ## 0.0.8
 
 Instrumentation quality pass (informed by reviewing the actual spans in Honeycomb).
