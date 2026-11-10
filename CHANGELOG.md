@@ -15,6 +15,8 @@ All notable changes to `trdr` are documented here.
   decides on a session's close and fills at the next open. The latest finished session is the
   current bar (full-day volume), history ends the session before it, today's in-progress bar
   is ignored, and no intraday data is fetched. A session's bar counts once it is 16:30 ET.
+  Symbols whose latest finished session is older than the rest of the batch (Yahoo can
+  publish a just-closed day with NaN prices) are dropped instead of being traded on stale data.
 - **`AlpacaBroker` waits for placed orders to settle** (polls for up to 10s). Before, the
   next symbol could be evaluated before a market order filled, sizing it off pre-fill cash
   and leaving the new position out of the exposure cap. A daily backtest books each fill

@@ -3,6 +3,7 @@
 import asyncio
 from datetime import date, datetime
 
+import pandas as pd
 import pytest
 import yfinance as yf
 
@@ -65,3 +66,29 @@ def test_unknown_symbol_has_no_current_bar(monkeypatch):
     provider = _provider(monkeypatch, datetime(2026, 3, 30, 9, 35, tzinfo=MARKET_TZ))
     with pytest.raises(NoBarsForSymbolException):
         asyncio.run(provider.get_current_bar("ABCDEFG"))
+
+
+def test_symbol_missing_the_latest_session_is_dropped(monkeypatch):
+    """Yahoo can publish a just-closed day with NaN prices; that row is skipped in conversion,
+    which would leave the symbol a session behind the rest."""
+
+    def download_with_nan_last_row_for_msft(*args, **kwargs):
+        # 30 sessions, so one bad row stays under the 5% conversion-failure threshold and only the
+        # staleness check can remove MSFT.
+        dates = pd.bdate_range(end=date(2026, 3, 27), periods=30)
+        cols = {(sym, f): [100.0 + i for i in range(30)] for sym in ("AAPL", "MSFT") for f in ("Open", "High", "Low", "Close")}
+        cols.update({(sym, "Volume"): [1000] * 30 for sym in ("AAPL", "MSFT")})
+        df = pd.DataFrame(cols, index=dates)
+        df.loc[df.index[-1], [("MSFT", f) for f in ("Open", "High", "Low", "Close")]] = float("nan")
+        return df
+
+    monkeypatch.setattr(yf, "download", download_with_nan_last_row_for_msft)
+    monkeypatch.setattr(yf.shared, "_ERRORS", {})
+    monkeypatch.setattr(module, "_market_now", lambda: datetime(2026, 3, 30, 9, 35, tzinfo=MARKET_TZ))
+
+    provider = asyncio.run(YFBarProvider.create(["AAPL", "MSFT"], completed_sessions_only=True))
+
+    assert provider.get_symbols() == ["AAPL"]
+    assert asyncio.run(provider.get_current_bar("AAPL")).trading_datetime.trading_date == date(2026, 3, 27)
+    with pytest.raises(NoBarsForSymbolException):
+        asyncio.run(provider.get_current_bar("MSFT"))

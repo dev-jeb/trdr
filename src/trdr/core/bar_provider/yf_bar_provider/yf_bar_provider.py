@@ -81,6 +81,22 @@ class YFBarProvider(BaseBarProvider):
                 span.set_status(trace.StatusCode.OK)
         return self
 
+    def _drop_stale_symbols(self, span) -> None:
+        """Drop symbols whose latest completed session is older than the newest in the batch.
+
+        Yahoo sometimes publishes a day's row with NaN prices for a while after the close; that
+        row is skipped during conversion, which would leave the symbol's "current" bar a session
+        behind every other symbol. Trading it on that stale view is worse than skipping it.
+        """
+        latest = max(bar.trading_datetime.trading_date for bar in self._current_bars.values())
+        stale = sorted(s for s, bar in self._current_bars.items() if bar.trading_datetime.trading_date < latest)
+        for symbol in stale:
+            del self._current_bars[symbol]
+            self._data_cache.pop(symbol, None)
+        span.set_attribute("latest_completed_session", latest.isoformat())
+        if stale:
+            span.add_event("dropped_stale_symbols", {"symbols": ",".join(stale), "latest_session": latest.isoformat()})
+
     @staticmethod
     def _completed_session_bars(bars: List[Bar], now: datetime) -> List[Bar]:
         """Drop the bar for today's session unless it has settled (see SESSION_SETTLED_AT)."""
@@ -150,6 +166,8 @@ class YFBarProvider(BaseBarProvider):
                     except Exception as e:
                         span.set_status(trace.Status(trace.StatusCode.ERROR))
                         raise e
+                if self._completed_sessions_only and self._current_bars:
+                    self._drop_stale_symbols(span)
                 span.set_attribute(
                     "number_of_symbols_with_data_that_failed_to_convert_to_bars",
                     len(symbols_with_data) - len(self._data_cache.keys()),
