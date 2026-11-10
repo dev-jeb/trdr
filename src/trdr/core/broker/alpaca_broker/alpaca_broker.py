@@ -1,6 +1,7 @@
 from opentelemetry.trace.status import Status, StatusCode
 from typing import List, Dict
-from datetime import datetime
+from collections import defaultdict
+from datetime import date, datetime, time, timedelta, timezone
 import os
 from decimal import Decimal
 
@@ -8,6 +9,11 @@ from ..base_broker import BaseBroker
 from ..models import Order, Position, OrderStatus, OrderSide, OrderType
 from ...shared.models import Money
 from ...shared.models import TradingDateTime
+
+# FINRA's day-trade window: the current business day plus the four before it.
+DAY_TRADE_WINDOW_BUSINESS_DAYS = 5
+# Alpaca's max page size for GET /v2/orders.
+ALPACA_ORDERS_PAGE_LIMIT = 500
 
 
 class AlpacaBroker(BaseBroker):
@@ -101,17 +107,99 @@ class AlpacaBroker(BaseBroker):
                 raise
 
     async def _refresh_day_trade_count(self):
+        """Set the rolling day-trade count.
+
+        Uses Alpaca's ``daytrade_count`` when the account reports it. Alpaca stopped returning
+        that field (along with ``pattern_day_trader``) from ``/v2/account`` in July 2026, so when
+        it is absent the count is derived from this account's filled orders instead.
+        """
         with self._tracer.start_as_current_span("alpaca_broker._refresh_day_trade_count") as span:
             try:
                 account_info = await self._get_account_info()
                 day_trade_count = account_info.get("daytrade_count", None)
-                if day_trade_count is None:
-                    span.add_event("day_trade_count is None")
-                    span.set_status(Status(StatusCode.OK))
-                    return
-                self._day_trade_count = int(day_trade_count)
-                span.set_attribute("day_trade_count", day_trade_count)
+                if day_trade_count is not None:
+                    self._day_trade_count = int(day_trade_count)
+                    span.set_attribute("day_trade_count.source", "account")
+                else:
+                    window_start = self._day_trade_window_start(datetime.now(timezone.utc).date())
+                    orders = await self._get_closed_orders_since(
+                        datetime.combine(window_start, time.min, tzinfo=timezone.utc)
+                    )
+                    if len(orders) >= ALPACA_ORDERS_PAGE_LIMIT:
+                        span.add_event("day_trade_orders_truncated", {"orders.count": len(orders)})
+                    self._day_trade_count = self._count_day_trades(orders, window_start)
+                    span.set_attribute("day_trade_count.source", "order_history")
+                    span.set_attribute("day_trade_count.window_start", window_start.isoformat())
+                span.set_attribute("day_trade_count", self._day_trade_count)
                 span.set_status(Status(StatusCode.OK))
+            except Exception as e:
+                span.record_exception(e)
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+                raise
+
+    @staticmethod
+    def _day_trade_window_start(today: date) -> date:
+        """Return the first date of the rolling day-trade window that ends on ``today``.
+
+        Weekends are skipped; market holidays are not, so a window spanning a holiday ends up one
+        trading day shorter than FINRA's.
+        """
+        start = today
+        remaining = DAY_TRADE_WINDOW_BUSINESS_DAYS - 1
+        while remaining > 0:
+            start -= timedelta(days=1)
+            if start.weekday() < 5:
+                remaining -= 1
+        return start
+
+    @staticmethod
+    def _count_day_trades(orders: List[Dict], window_start: date) -> int:
+        """Count day trades in a list of Alpaca order dicts filled on or after ``window_start``.
+
+        A symbol with both buy and sell fills on the same date counts ``min(buys, sells)`` day
+        trades. This errs high (selling an overnight position and re-buying the same day counts
+        as one), which only makes the PDT strategies more cautious. Fills are bucketed by UTC
+        date, which matches the trading date for regular-hours (9:30-16:00 ET) orders.
+        """
+        fills: Dict[tuple, Dict[str, int]] = defaultdict(lambda: {"buy": 0, "sell": 0})
+        for order in orders:
+            filled_at = order.get("filled_at")
+            side = (order.get("side") or "").lower()
+            if not filled_at or side not in ("buy", "sell") or Decimal(order.get("filled_qty") or "0") <= 0:
+                continue
+            fill_date = datetime.fromisoformat(filled_at).astimezone(timezone.utc).date()
+            if fill_date < window_start:
+                continue
+            fills[(order["symbol"], fill_date)][side] += 1
+        return sum(min(counts["buy"], counts["sell"]) for counts in fills.values())
+
+    async def _get_closed_orders_since(self, after: datetime) -> List[Dict]:
+        """Fetch this account's closed orders (any symbol) submitted after ``after``."""
+        with self._tracer.start_as_current_span("alpaca_broker._get_closed_orders_since") as span:
+            params = {
+                "status": "closed",
+                "after": after.isoformat(),
+                "limit": str(ALPACA_ORDERS_PAGE_LIMIT),
+                "direction": "desc",
+            }
+            span.set_attribute("after", params["after"])
+            try:
+                async with self._session.get(
+                    f"{self._base_url}/v2/orders", headers=self._headers, params=params
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        span.set_attribute("error.type", "http_error")
+                        span.set_attribute("error.status_code", response.status)
+                        span.set_attribute("error.message", error_text)
+                        span.set_status(
+                            Status(StatusCode.ERROR, f"Failed to get orders: {response.status} {error_text}")
+                        )
+                        raise Exception(f"Failed to get orders: {response.status} {error_text}")
+                    orders = await response.json()
+                    span.set_attribute("orders.count", len(orders))
+                    span.set_status(Status(StatusCode.OK))
+                    return orders
             except Exception as e:
                 span.record_exception(e)
                 span.set_status(Status(StatusCode.ERROR, str(e)))

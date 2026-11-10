@@ -95,6 +95,8 @@ class BaseBroker(ABC):
             except Exception as e:
                 span.record_exception(e)
                 span.set_status(trace.StatusCode.ERROR)
+                # The caller never gets the instance (or its context manager), so close here.
+                await self._session.close()
                 raise
             else:
                 span.set_status(trace.StatusCode.OK)

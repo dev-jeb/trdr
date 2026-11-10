@@ -2,6 +2,19 @@
 
 All notable changes to `trdr` are documented here.
 
+## 0.0.10
+
+### Fixed
+- **`AlpacaBroker` works with Alpaca's current account API.** Alpaca stopped returning
+  `daytrade_count` from `/v2/account` (first seen 2026-07-06), so `_refresh_day_trade_count`
+  left the count unset and `BaseBroker.create()` raised `Day trade count is not initialized`
+  on every run. Nothing could trade. When the field is missing, the broker now derives the
+  rolling 5-business-day count from the account's filled orders. It errs high, so PDT
+  strategies only get more cautious. If Alpaca does report the field, it is still used. The
+  span attribute `day_trade_count.source` (`account` / `order_history`) shows which path ran.
+- **No leaked HTTP session when broker creation fails.** `BaseBroker.create()` now closes its
+  `aiohttp` session before re-raising, removing the `Unclosed client session` warnings.
+
 ## 0.0.9
 
 ### Changed
