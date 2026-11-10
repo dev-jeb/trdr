@@ -130,34 +130,40 @@ class TradingContext:
         """
         with self._tracer.start_as_current_span("TradingContext.next_symbol") as span:
             span.set_attribute("length_of_symbol_stack", len(self.symbol_stack))
-            try:
-                self.current_symbol = self.symbol_stack.pop(0)
-            except IndexError:
-                span.set_status(trace.StatusCode.OK)
-                span.add_event("No more symbols to process")
-                self.current_symbol = None
-                self.current_position = None
-                self.current_security = None
-                return False
-            else:
-                self.current_position = await self.broker.get_position(self.current_symbol)
+            while True:
+                try:
+                    self.current_symbol = self.symbol_stack.pop(0)
+                except IndexError:
+                    span.set_status(trace.StatusCode.OK)
+                    span.add_event("No more symbols to process")
+                    self.current_symbol = None
+                    self.current_position = None
+                    self.current_security = None
+                    return False
                 self.current_security = await self.security_provider.get_security(self.current_symbol)
+                if self.current_security is not None:
+                    break
+                # No usable bars for this symbol right now (e.g. a gap in the data feed). Skip just
+                # this symbol; raising here used to abort every remaining symbol in the run.
+                span.add_event("skipped_symbol_without_data", {"symbol": self.current_symbol})
 
-                if not self.current_security.symbol == self.current_symbol:
+            self.current_position = await self.broker.get_position(self.current_symbol)
+
+            if not self.current_security.symbol == self.current_symbol:
+                span.set_status(trace.StatusCode.ERROR)
+                error = ValueError("Current security symbol does not match current symbol")
+                span.record_exception(error)
+                raise error
+
+            if self.current_position is not None:
+                if self.current_position.symbol != self.current_symbol:
                     span.set_status(trace.StatusCode.ERROR)
-                    error = ValueError("Current security symbol does not match current symbol")
+                    error = ValueError("Current position symbol does not match current symbol")
                     span.record_exception(error)
                     raise error
 
-                if self.current_position is not None:
-                    if self.current_position.symbol != self.current_symbol:
-                        span.set_status(trace.StatusCode.ERROR)
-                        error = ValueError("Current position symbol does not match current symbol")
-                        span.record_exception(error)
-                        raise error
-
-                span.set_status(trace.StatusCode.OK)
-                return True
+            span.set_status(trace.StatusCode.OK)
+            return True
 
     async def get_value_for_identifier(self, identifier: ContextIdentifier) -> Decimal:
         """

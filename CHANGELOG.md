@@ -21,6 +21,11 @@ All notable changes to `trdr` are documented here.
   before its next decision.
 
 ### Fixed
+- **A symbol with no data no longer aborts the run.** `TradingContext.next_symbol` crashed
+  with `'NoneType' object has no attribute 'symbol'` when `get_security()` returned `None`
+  (e.g. a one-day gap in a symbol's bars). That stopped every remaining symbol, including
+  exits. In backtests the whole simulated day was dropped, so earlier results silently
+  skipped those days. The symbol is now skipped with a `skipped_symbol_without_data` event.
 - **DSL arithmetic `+`, `-` and `/` now work.** They were documented, and the parser and AST
   handled them, but the lexer only tokenized `*`. Unary minus (`-ATR14`) is supported, and
   dividing by zero skips the security (like a missing indicator) instead of aborting the run.

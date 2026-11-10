@@ -88,3 +88,13 @@ def test_market_ma200_needs_200_bars():
     context = _context("SPY", {"AAPL": AAPL, "SPY": short_spy})
     with pytest.raises(MissingContextValue):
         _value(context, ContextIdentifier.MARKET_MA200)
+
+
+def test_symbol_without_data_is_skipped_not_fatal():
+    """Regression: get_security() -> None crashed next_symbol ('NoneType' has no 'symbol'),
+    aborting every remaining symbol that run (in backtests, the whole simulated day)."""
+    context = _context(None, {"GAP": None, "AAPL": AAPL})
+
+    assert asyncio.run(context.next_symbol()) is True
+    assert context.current_symbol == "AAPL"
+    assert asyncio.run(context.next_symbol()) is False
