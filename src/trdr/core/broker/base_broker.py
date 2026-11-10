@@ -6,7 +6,7 @@ from opentelemetry.trace import NoOpTracer
 from decimal import Decimal
 from datetime import timedelta
 
-from .models import Order, Position
+from .models import Order, OrderSide, Position, PositionSide
 from ..bar_provider.models import Bar
 from ..shared.models import Money, TradingDateTime
 from .pdt.base_pdt_strategy import BasePDTStrategy
@@ -285,11 +285,15 @@ class BaseBroker(ABC):
         """
         with self._tracer.start_as_current_span("BaseBroker._validate_pre_order") as span:
             order_cost = order.quantity_requested * order.current_price.amount
+            closing = self._closes_position(order, self._positions.get(order.symbol))
             span.set_attribute("order.symbol", order.symbol)
             span.set_attribute("order.estimated_cost", float(order_cost))
+            span.set_attribute("order.closes_position", closing)
             span.set_attribute("cash_available", float(self._cash.amount))
 
-            if order_cost > self._cash.amount:
+            # Only opening (or adding to) a position needs cash; closing one frees it. Checking
+            # cash on closing orders meant a fully invested account could never exit.
+            if not closing and order_cost > self._cash.amount:
                 # "Wanted to trade but couldn't": surface the shortfall, not just an exception.
                 span.add_event(
                     "order_rejected",
@@ -304,11 +308,12 @@ class BaseBroker(ABC):
                 e = InsufficientFundsException("Insufficient cash to place order")
                 span.record_exception(e)
                 raise e
-            if not (self._cash.amount - order_cost) < 25000:
+            cash_after_order = self._cash.amount + order_cost if closing else self._cash.amount - order_cost
+            if not cash_after_order < 25000:
                 span.add_event("order_allowed", attributes={"reason": "cash_over_25k_pdt_skipped"})
                 span.set_status(trace.StatusCode.OK)
                 return
-            span.add_event("pdt_check", attributes={"cash_after_order": float(self._cash.amount - order_cost)})
+            span.add_event("pdt_check", attributes={"cash_after_order": float(cash_after_order)})
             count_of_positions_opened_today = await self.get_count_of_positions_opened_today()
             span.set_attribute("pdt.rolling_day_trade_count", self._day_trade_count)
             span.set_attribute("pdt.positions_opened_today", count_of_positions_opened_today)
@@ -342,6 +347,16 @@ class BaseBroker(ABC):
             span.add_event("order_allowed", attributes={"reason": "pdt_check_passed"})
             span.set_status(trace.StatusCode.OK)
             # Additional common verifications can be incorporated here
+
+    @staticmethod
+    def _closes_position(order: Order, position: Optional[Position]) -> bool:
+        """True if `order` reduces or closes `position` (selling a long, buying back a short)
+        without flipping it to the other side."""
+        if position is None or position.size is None or order.quantity_requested > position.size:
+            return False
+        if position.side == PositionSide.LONG:
+            return order.side == OrderSide.SELL
+        return order.side == OrderSide.BUY
 
     def _clear_current_state(self) -> None:
         with self._tracer.start_as_current_span("BaseBroker._clear_current_state") as span:

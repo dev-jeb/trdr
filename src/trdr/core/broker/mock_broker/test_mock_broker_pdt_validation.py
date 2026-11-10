@@ -88,10 +88,11 @@ def test_nun_strategy_sell_orders_day_trade_limits(mock_broker_with_nun_strategy
     symbol = list(broker._positions.keys())[0]
     existing_position = broker._positions.get(symbol)
     order_side = OrderSide.SELL if existing_position.side == PositionSide.LONG else OrderSide.BUY
-    # Test sell orders with different day trade counts
+    # Test sell orders with different day trade counts. Cash stays under $25k even after the
+    # sale's $1,000 proceeds, so the PDT strategy is consulted.
     for day_trade_count in range(4):
         broker._day_trade_count = day_trade_count
-        broker._cash = Money(amount=Decimal(24999))
+        broker._cash = Money(amount=Decimal(20000))
 
         # order to close existing position
         sell_order = Order(
@@ -165,7 +166,7 @@ def test_wiggle_strategy_buy_orders_day_trade_limits(mock_broker_with_wiggle_str
 
 def test_wiggle_strategy_sell_orders_day_trade_limits(mock_broker_with_wiggle_strategy, monkeypatch):
     broker = mock_broker_with_wiggle_strategy
-    broker._cash = Money(amount=Decimal(24999))
+    broker._cash = Money(amount=Decimal(20000))
 
     async def mock_count():
         return 0
@@ -248,7 +249,7 @@ def test_yolo_strategy_buy_orders_day_trade_limits(mock_broker_with_yolo_strateg
 
 def test_yolo_strategy_sell_orders_day_trade_limits(mock_broker_with_yolo_strategy, monkeypatch):
     broker = mock_broker_with_yolo_strategy
-    broker._cash = Money(amount=Decimal(24999))
+    broker._cash = Money(amount=Decimal(20000))
 
     async def mock_count():
         return 0
@@ -287,3 +288,29 @@ def test_yolo_strategy_sell_orders_day_trade_limits(mock_broker_with_yolo_strate
             # Should not be able to sell with 3 day trades
             with pytest.raises(PDTStrategyException):
                 asyncio.run(broker._validate_pre_order(sell_order))
+
+
+def test_fully_invested_account_can_still_sell(mock_broker_with_nun_strategy):
+    """Regression: the cash check ran on closing orders too, so with ~no cash left (equal-weight,
+    fully invested) every exit was rejected as 'insufficient cash' and positions were stuck."""
+    from ..exceptions import InsufficientFundsException
+
+    broker = mock_broker_with_nun_strategy
+    broker._cash = Money(amount=Decimal(50))
+    symbol, position = next(iter(broker._positions.items()))
+    closing_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
+
+    def order(side, qty):
+        return Order(
+            symbol=symbol, side=side, type=OrderType.MARKET, quantity_requested=qty,
+            quantity_filled=Decimal(0), status=OrderStatus.PENDING,
+            current_price=Money(amount=Decimal(100)), created_at=TradingDateTime.now(),
+            client_order_id="test-strategy:abc12345", strategy_name="test-strategy",
+        )
+
+    broker._day_trade_count = 0
+    asyncio.run(broker._validate_pre_order(order(closing_side, position.size)))  # closing: allowed
+
+    opening_side = OrderSide.BUY if closing_side == OrderSide.SELL else OrderSide.SELL
+    with pytest.raises(InsufficientFundsException):
+        asyncio.run(broker._validate_pre_order(order(opening_side, Decimal(10))))  # adding: needs cash

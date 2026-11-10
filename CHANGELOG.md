@@ -35,6 +35,13 @@ cross-sectional ranking, multi-asset allocation and calendar effects.
 - Condition descriptions in traces parenthesize nested arithmetic: `(a + b) * c`.
 
 ### Fixed
+- **A fully invested account can sell.** `BaseBroker._validate_pre_order` applied the
+  insufficient-cash check to every order, including sells that close a position. With
+  little cash left (e.g. equal-weight, fully invested), every exit was rejected and positions
+  could never be closed, live (Alpaca) as well as in backtests. Earlier strategies kept at
+  least 40% cash, so this never showed. Now only orders that open or add to a position need
+  cash, and the PDT gate counts a closing order's proceeds as cash *after* the order instead of
+  subtracting them.
 - **`AlpacaBroker` waits up to 60s for an order to settle** (was 10s). On 2026-11-10, paper
   orders sent at 9:35:41 and 9:35:50 both filled at 9:36:09, so the 10s wait timed out and
   the second order was sized from pre-fill cash.
