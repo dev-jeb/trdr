@@ -132,6 +132,7 @@ class TradingEngine:
         """
         with self._tracer.start_as_current_span("TradingEngine.execute") as span:
             try:
+                self.trading_context.strategy_name = self.strategy_file_name
                 span.add_event("canceling_pending_orders_for_strategy")
                 await self.trading_context.broker.cancel_all_orders(strategy_name=self.strategy_file_name)
 

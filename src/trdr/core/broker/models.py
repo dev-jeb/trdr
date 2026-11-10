@@ -102,6 +102,40 @@ class Position(BaseModel):
     def get_orders_for_strategy(self, strategy_name: str) -> List[Order]:
         return [order for order in self.orders if order.strategy_name == strategy_name]
 
+    @staticmethod
+    def _orders_since_flat(orders: List[Order]) -> List[Order]:
+        """The filled orders since the share count last returned to zero, oldest first.
+
+        A broker may attach a symbol's whole order history (Alpaca does). Earlier round trips
+        must not leak into the cost basis: buying at 50, selling at 56 and re-buying at 45
+        would otherwise report an average cost of 39.
+        """
+
+        def when(order: Order):
+            stamp = order.filled_at or order.created_at
+            return stamp.timestamp if stamp is not None else None
+
+        filled = [o for o in orders if o.net_quantity_filled != 0]
+        dated = sorted((o for o in filled if when(o) is not None), key=when)
+        undated = [o for o in filled if when(o) is None]  # keep their given order, after dated ones
+        current: List[Order] = []
+        running = Decimal(0)
+        for order in dated + undated:
+            current.append(order)
+            running += order.net_quantity_filled
+            if running == 0:
+                current = []
+        return current
+
+    @staticmethod
+    def _average_cost_of(orders: List[Order]) -> Money:
+        """Net cost per share held: (buys - sells) / shares, so a partial sale's realized P&L
+        adjusts the remaining basis (see test_average_cost_mixed_buy_sell_orders)."""
+        size = abs(sum(order.net_quantity_filled for order in orders))
+        if size == Decimal(0):
+            return Money(amount=Decimal(0))
+        return Money(amount=sum(order.net_quantity_filled * order.avg_fill_price.amount for order in orders) / size)
+
     def get_size_for_strategy(self, strategy_name: str) -> Decimal:
         strategy_orders = self.get_orders_for_strategy(strategy_name)
         if not strategy_orders:
@@ -109,15 +143,8 @@ class Position(BaseModel):
         return abs(sum(order.net_quantity_filled for order in strategy_orders))
 
     def get_average_cost_for_strategy(self, strategy_name: str) -> Money:
-        strategy_orders = self.get_orders_for_strategy(strategy_name)
-        if not strategy_orders:
-            return Money(amount=Decimal(0))
-        size = abs(sum(order.net_quantity_filled for order in strategy_orders))
-        if size == Decimal(0):
-            return Money(amount=Decimal(0))
-        return Money(
-            amount=sum(order.net_quantity_filled * order.avg_fill_price.amount for order in strategy_orders) / size
-        )
+        """Average cost of this strategy's own shares in the current holding period."""
+        return self._average_cost_of(self._orders_since_flat(self.get_orders_for_strategy(strategy_name)))
 
     @property
     def side(self) -> PositionSide:
@@ -144,13 +171,8 @@ class Position(BaseModel):
 
     @property
     def average_cost(self) -> Money:
-        if len(self.orders) == 0:
-            return Money(amount=Decimal(0))
-        if self.size == Decimal(0):
-            return Money(amount=Decimal(0))
-        return Money(
-            amount=sum(order.net_quantity_filled * order.avg_fill_price.amount for order in self.orders) / self.size
-        )
+        """Average cost of the whole position (all strategies) in the current holding period."""
+        return self._average_cost_of(self._orders_since_flat(self.orders))
 
     def to_json(self) -> str:
         return self.model_dump_json()

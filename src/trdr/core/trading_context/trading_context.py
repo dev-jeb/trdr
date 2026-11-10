@@ -68,6 +68,9 @@ class TradingContext:
         self.universe = list(universe) if universe is not None else None
         self.sessions = sorted(set(sessions)) if sessions else None
         self.universe_symbols: list[str] = []
+        # Set by TradingEngine: scopes AVERAGE_COST to this strategy's own shares in a position
+        # other strategies may also hold.
+        self.strategy_name: str | None = None
         self._security_cache: dict[str, Security | None] = {}
         self._rank_cache: dict[int, dict[str, Decimal]] = {}
         self._tracer = tracer
@@ -458,7 +461,13 @@ class TradingContext:
                         error = MissingContextValue("Average cost is not available as no position is open")
                         span.add_event(str(error))
                         raise error
-                    average_cost = self.current_position.average_cost
+                    average_cost = (
+                        self.current_position.get_average_cost_for_strategy(self.strategy_name)
+                        if self.strategy_name
+                        else self.current_position.average_cost
+                    )
+                    if average_cost is not None and average_cost.amount == 0:
+                        average_cost = None  # this strategy holds none of the position
                     if average_cost is None:
                         error = MissingContextValue("Average cost is not available")
                         span.add_event(str(error))

@@ -32,12 +32,21 @@ class AlpacaBroker(BaseBroker):
         """Disabled constructor - use AlpacaBroker.create() instead."""
         raise TypeError("Use AlpacaBroker.create() instead to create a new broker")
 
+    def _configure(
+        self, api_key: str | None = None, secret_key: str | None = None, base_url: str | None = None
+    ) -> None:
+        """Options for AlpacaBroker.create(): explicit credentials for one Alpaca account, so one
+        process can run several accounts (e.g. one per strategy). Each defaults to the
+        ALPACA_API_KEY / ALPACA_SECRET_KEY / ALPACA_BASE_URL environment variable."""
+        self._explicit_credentials = (api_key, secret_key, base_url)
+
     async def _initialize(self):
         with self._tracer.start_as_current_span("alpaca_broker._initialize") as span:
-            # expect api key and base url to be present as environment variables
-            api_key = os.getenv("ALPACA_API_KEY")
-            secret_key = os.getenv("ALPACA_SECRET_KEY")
-            base_url = os.getenv("ALPACA_BASE_URL")
+            explicit_key, explicit_secret, explicit_url = getattr(self, "_explicit_credentials", (None, None, None))
+            api_key = explicit_key or os.getenv("ALPACA_API_KEY")
+            secret_key = explicit_secret or os.getenv("ALPACA_SECRET_KEY")
+            base_url = explicit_url or os.getenv("ALPACA_BASE_URL")
+            span.set_attribute("credentials.source", "explicit" if explicit_key else "environment")
             if not api_key or not secret_key or not base_url:
                 span.add_event("missing_environment_variables")
                 span.set_status(

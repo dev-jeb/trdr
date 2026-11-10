@@ -342,3 +342,25 @@ class TestOrderSettling:
         asyncio.run(broker._place_order(_market_buy()))
 
         assert session.polls >= 2
+
+
+class TestExplicitCredentials:
+    def test_explicit_credentials_override_environment(self, monkeypatch):
+        """One process, several accounts: each broker gets its own keys."""
+        for var in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL"):
+            monkeypatch.delenv(var, raising=False)
+        _stub_alpaca_http(monkeypatch, ACCOUNT_WITHOUT_DAYTRADE_COUNT, [])
+
+        async def run():
+            async with await AlpacaBroker.create(
+                pdt_strategy=NunStrategy.create(), api_key="k2", secret_key="s2",
+                base_url="https://paper-api.alpaca.markets",
+            ) as broker:
+                return broker
+
+        broker = asyncio.run(run())
+        assert broker._headers == {"APCA-API-KEY-ID": "k2", "APCA-API-SECRET-KEY": "s2"}
+
+    def test_unknown_create_option_is_rejected(self, alpaca_env):
+        with pytest.raises(TypeError, match="unexpected"):
+            asyncio.run(AlpacaBroker.create(pdt_strategy=NunStrategy.create(), api_secret="typo"))

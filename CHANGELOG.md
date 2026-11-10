@@ -2,6 +2,26 @@
 
 All notable changes to `trdr` are documented here.
 
+## 0.0.13
+
+### Fixed
+- **Cost basis ignores earlier round trips.** Alpaca positions are rebuilt from the symbol's
+  whole order history, and `Position.average_cost` summed all of it. Buying at 50, selling at
+  56 and later re-buying at 45 reported an average cost of 39, so a +12% target fired on the
+  next run. `average_cost` and `get_average_cost_for_strategy` now use only the orders since the
+  position was last flat, in fill order. The backtest broker drops flat positions, so
+  backtests were not affected: this was a live-only divergence.
+- **`AVERAGE_COST` is the running strategy's own cost.** In a position shared by strategies, the
+  DSL used the blended cost of everyone's shares (e.g. 54.97 instead of the strategy's 58.52).
+  `TradingEngine` now sets `TradingContext.strategy_name`, and `AVERAGE_COST` uses that
+  strategy's orders. Holding none of the position is a missing value.
+
+### Added
+- **`AlpacaBroker.create(..., api_key=, secret_key=, base_url=)`** for explicit credentials, so
+  one process can trade several Alpaca accounts (e.g. one per strategy). Defaults remain the
+  `ALPACA_*` environment variables. `BaseBroker.create(**options)` passes implementation options
+  to a new `_configure()` hook, and unknown options raise `TypeError`.
+
 ## 0.0.12
 
 New building blocks for three strategy classes that the DSL could not express before:

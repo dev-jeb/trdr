@@ -66,6 +66,7 @@ class BaseBroker(ABC):
         cls: Type[T],
         pdt_strategy: BasePDTStrategy,
         tracer: trace.Tracer | None = NoOpTracer(),
+        **options,
     ) -> T:
         """
         Factory method to create and initialize a broker instance.
@@ -78,6 +79,8 @@ class BaseBroker(ABC):
         Args:
             pdt_strategy: Strategy for Pattern Day Trading rule enforcement
             tracer: OpenTelemetry tracer for instrumentation
+            **options: Implementation-specific settings, passed to `_configure()` before
+                initialization (e.g. AlpacaBroker's api_key / secret_key / base_url)
 
         Returns:
             An initialized instance of the concrete broker
@@ -88,6 +91,12 @@ class BaseBroker(ABC):
         """
         self = cls.__new__(cls)
         BaseBroker.__init__(self, pdt_strategy=pdt_strategy, tracer=tracer)
+        try:
+            self._configure(**options)
+        except TypeError:
+            # Unknown option: nothing was initialized yet, but the session exists.
+            await self._session.close()
+            raise
         with self._tracer.start_as_current_span("BaseBroker.create") as span:
             try:
                 await self._initialize()
@@ -102,6 +111,11 @@ class BaseBroker(ABC):
                 span.set_status(trace.StatusCode.OK)
 
             return self
+
+    def _configure(self, **options) -> None:
+        """Accept implementation-specific create() options. The base broker takes none."""
+        if options:
+            raise TypeError(f"{type(self).__name__}.create() got unexpected options: {sorted(options)}")
 
     @abstractmethod
     def _initialize(self):
