@@ -256,6 +256,13 @@ class ContextIdentifier(str, Enum):
     CURRENT_VOLUME = "CURRENT_VOLUME"
     CURRENT_PRICE = "CURRENT_PRICE"
 
+    # Market regime: the benchmark symbol given to TradingContext.create(market_symbol=...),
+    # e.g. SPY. Same value for every security, so `MARKET_PRICE > MARKET_MA200` gates a whole
+    # strategy on the broad market's trend.
+    MARKET_PRICE = "MARKET_PRICE"  # benchmark's current price
+    MARKET_MA50 = "MARKET_MA50"  # benchmark's 50-day moving average
+    MARKET_MA200 = "MARKET_MA200"  # benchmark's 200-day moving average
+
     # Account data (from broker)
     ACCOUNT_EXPOSURE = "ACCOUNT_EXPOSURE"  # Ratio of invested funds to total capital
     NUMBER_OF_OPEN_POSITIONS = "NUMBER_OF_OPEN_POSITIONS"  # Count of currently held positions

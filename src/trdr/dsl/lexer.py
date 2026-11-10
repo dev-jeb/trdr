@@ -29,6 +29,9 @@ class ReservedKeyword(str, Enum):
 # Valid identifiers include both context identifiers and reserved keywords
 VALID_IDENTIFIERS = list(ContextIdentifier.__members__.keys()) + [kw.value for kw in ReservedKeyword]
 
+ARITHMETIC_OPERATOR_CHARS = "+-*/"
+COMPARISON_OPERATOR_CHARS = "><!="
+
 
 class TokenType(Enum):
     INDENT = auto()
@@ -76,8 +79,18 @@ class Lexer:
             # Handle indentation at start of line
             if self.at_line_start:
                 indent_level = self._count_indent()
+                # A comment-only line carries no code, so (as in Python) its indentation
+                # must not open or close a block.
+                if self.pos < len(self.text) and self.text[self.pos] == "#":
+                    self._skip_comment()
+                    continue
                 tokens.extend(self._handle_indentation(indent_level))
                 self.at_line_start = False
+                continue
+
+            # Comments run to the end of the line
+            if char == "#":
+                self._skip_comment()
                 continue
 
             # Skip whitespace
@@ -103,7 +116,12 @@ class Lexer:
             elif char.isalpha():
                 tokens.append(self._tokenize_identifier())
 
-            elif char in "><!=*":
+            elif char in ARITHMETIC_OPERATOR_CHARS:
+                # Always single-character, so `* -1` lexes as two operators.
+                tokens.append(Token(TokenType.OPERATOR, char, self.line))
+                self._advance()
+
+            elif char in COMPARISON_OPERATOR_CHARS:
                 tokens.append(self._tokenize_operator())
 
             elif char == "\n":
@@ -125,15 +143,26 @@ class Lexer:
         self.pos += 1
 
     def _count_indent(self) -> int:
-        """Count the indentation level of the current line"""
+        """Count the indentation level of the current line.
+
+        Blank lines are consumed here too, so the count is that of the next line with content.
+        """
         indent = 0
         while self.pos < len(self.text) and self.text[self.pos].isspace():
             if self.text[self.pos] == " ":
                 indent += 1
             elif self.text[self.pos] == "\t":
                 indent += 8  # Convert tabs to spaces (standard Python behavior)
+            elif self.text[self.pos] == "\n":
+                indent = 0  # a blank line: restart the count on the next line
+                self.line += 1
             self._advance()
         return indent
+
+    def _skip_comment(self):
+        """Advance to the newline that ends the current comment (the newline itself is kept)."""
+        while self.pos < len(self.text) and self.text[self.pos] != "\n":
+            self._advance()
 
     def _handle_indentation(self, indent_level: int) -> List[Token]:
         """Handle indentation changes and emit INDENT/DEDENT tokens"""
@@ -193,9 +222,9 @@ class Lexer:
             raise LexerError(f"Invalid identifier '{value}' at line {self.line}", self.line)
 
     def _tokenize_operator(self) -> Token:
-        """Tokenize an operator"""
+        """Tokenize a comparison operator: >, <, ==, >=, <=, !="""
         start_pos = self.pos
-        while self.pos < len(self.text) and self.text[self.pos] in "><!=*":
+        while self.pos < len(self.text) and self.text[self.pos] in COMPARISON_OPERATOR_CHARS:
             self._advance()
 
         value = self.text[start_pos : self.pos]

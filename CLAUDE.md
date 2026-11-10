@@ -55,8 +55,12 @@ uv run pytest src/trdr/path/to/test_file.py::TestClass::test_method
 ### Account
 - `ACCOUNT_EXPOSURE`, `AVAILABLE_CASH`, `AVERAGE_COST`, `NUMBER_OF_OPEN_POSITIONS`
 
+### Market Regime (benchmark passed as `TradingContext.create(..., market_symbol="SPY")`)
+- `MARKET_PRICE`, `MARKET_MA50`, `MARKET_MA200`
+
 ### Operators
 - Crossovers: `CROSSED_ABOVE`, `CROSSED_BELOW` (MA identifiers only)
 - Logic: `ALL_OF`, `ANY_OF`
-- Comparison: `>`, `<`, `>=`, `<=`, `==`
-- Arithmetic: `+`, `-`, `*`, `/`
+- Comparison: `>`, `<`, `>=`, `<=`, `==`, `!=`
+- Arithmetic: `+`, `-`, `*`, `/` (`*` `/` bind tighter; unary minus supported)
+- Comments: `#` to end of line

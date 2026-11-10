@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "trdr"
-version = "0.0.10"
+version = "0.0.11"
 authors = [
     { name = "developer_jeb", email = "developer_jeb@outlook.com" },
 ]
@@ -17,6 +17,7 @@ dependencies = [
     "opentelemetry-sdk>=1.42.1",
     "opentelemetry-exporter-otlp-proto-http>=1.42.1",
     "pydantic>=2.13.4",
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

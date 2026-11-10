@@ -156,15 +156,14 @@ class Parser:
         left = self.parse_arithmetic()
         token = self.current()
 
-        # Handle standard binary operators
-        if token.type == TokenType.OPERATOR and token.value in {">", "<", "==", "+", "-", "*", "/"}:
-            try:
-                op = BinaryOperator.from_string(token.value)
-                self.advance()
-                right = self.parse_arithmetic()
-                return BinaryExpression(left, op, right)
-            except ValueError:
-                pass  # If not a valid BinaryOperator, just return left
+        # Handle comparison operators (arithmetic was already consumed by parse_arithmetic)
+        if token.type == TokenType.OPERATOR and token.value in {">", "<", "==", ">=", "<=", "!="}:
+            op = BinaryOperator.from_string(token.value)
+            self.advance()
+            right = self.parse_arithmetic()
+            return BinaryExpression(left, op, right)
+        if token.type == TokenType.OPERATOR and token.value not in {"+", "-", "*", "/"}:
+            raise ParserError(f"Unknown operator '{token.value}'", token.line)
 
         # Handle crossover operators (which are identifiers, not operators)
         elif token.type == TokenType.IDENTIFIER and token.value.upper() in {
@@ -224,6 +223,10 @@ class Parser:
             expr = self.parse_arithmetic()
             self.expect(TokenType.RIGHT_PAREN)
             return expr
+        elif token.type == TokenType.OPERATOR and token.value == "-":
+            # Unary minus, e.g. `-0.5` or `-ATR14`: evaluated as (0 - operand)
+            self.advance()
+            return BinaryExpression(Literal(0), BinaryOperator.MINUS, self.parse_factor())
         else:
             raise ParserError(f"Unexpected token {token.type.value} with value '{token.value}'", token.line)
 

@@ -142,6 +142,8 @@ The TRDR Domain Specific Language provides a clean (I hope) syntax for expressin
 
 ### Strategy Structure
 
+Indentation is significant. `#` starts a comment that runs to the end of the line.
+
 ```
 STRATEGY
     NAME "Strategy Name"
@@ -184,6 +186,7 @@ BBAND_LOWER
 >=              # Greater than or equal to
 <=              # Less than or equal to
 ==              # Equal to
+!=              # Not equal to
 CROSSED_ABOVE   # One moving average crossed above another (MA identifiers only)
 CROSSED_BELOW   # One moving average crossed below another (MA identifiers only)
 ```
@@ -207,15 +210,50 @@ AVERAGE_COST             # Average cost of current position
 NUMBER_OF_OPEN_POSITIONS # Number of currently open positions
 ```
 
+### Market Regime
+
+Values from a benchmark (e.g. SPY), the same for every security, so a strategy can stand aside
+when the broad market is in a downtrend:
+
+```
+MARKET_PRICE    # Benchmark's current price
+MARKET_MA50     # Benchmark's 50-day moving average
+MARKET_MA200    # Benchmark's 200-day moving average
+```
+
+Pass the benchmark to the context and include it in the bar provider; it is used only as a
+reference and is not traded:
+
+```python
+bar_provider = await YFBarProvider.create(symbols + ["SPY"])
+context = await TradingContext.create(security_provider, broker, market_symbol="SPY")
+```
+
+Example filter: `MARKET_PRICE > MARKET_MA200`.
+
 ### Mathematical Operators
 
 ```
 +               # Addition
--               # Subtraction
+-               # Subtraction (also unary minus: -ATR14)
 *               # Multiplication
-/               # Division
+/               # Division (dividing by zero skips the security, like a missing indicator)
 (expression)    # Parentheses for grouping expressions
 ```
+
+`*` and `/` bind tighter than `+` and `-`, e.g. `CURRENT_PRICE < (AVERAGE_COST - ATR14 * 2)`.
+
+### Matching a daily backtest
+
+A daily backtest decides on each session's close and fills at the next open. To trade the same
+way live, run once a day shortly after the open with completed sessions only:
+
+```python
+bar_provider = await YFBarProvider.create(symbols, completed_sessions_only=True)
+```
+
+The latest finished session is then the current bar (`CURRENT_PRICE` is its close and
+`CURRENT_VOLUME` its full-day volume), and today's in-progress session is ignored.
 
 ## 📚 Examples
 

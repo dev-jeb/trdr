@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
+from . import alpaca_broker as alpaca_module
 from .alpaca_broker import AlpacaBroker
 from .. import base_broker as base_broker_module
 from ..pdt.nun_strategy import NunStrategy
@@ -283,3 +284,61 @@ class TestOrderPagination:
         broker = _broker_with_session(monkeypatch, session)
 
         assert len(broker._positions["AAPL"].orders) == 601
+
+
+# --- Waiting for placed orders to settle ------------------------------------------------------
+
+
+class OrderFlowSession:
+    """POST /v2/orders accepts an order; GET /v2/orders/{id} walks through ``statuses``."""
+
+    def __init__(self, statuses: list):
+        self.statuses = list(statuses)
+        self.polls = 0
+
+    def post(self, url, headers=None, json=None):
+        return _FakeResponse({"id": "order-1", "status": "accepted"})
+
+    def get(self, url, headers=None, params=None):
+        if url.endswith("/v2/orders/order-1"):
+            self.polls += 1
+            return _FakeResponse({"id": "order-1", "status": self.statuses[min(self.polls, len(self.statuses)) - 1]})
+        return _FakeResponse([])  # positions / order history: empty account
+
+    async def close(self):
+        pass
+
+
+def _market_buy():
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        symbol="AAPL",
+        quantity_requested=1,
+        side=SimpleNamespace(value="buy"),
+        type=SimpleNamespace(value="market"),
+        time_in_force="day",
+        client_order_id="strategy:1",
+    )
+
+
+class TestOrderSettling:
+    def test_waits_until_the_order_fills(self, monkeypatch):
+        monkeypatch.setattr(alpaca_module, "ORDER_SETTLE_POLL_SECONDS", 0)
+        session = OrderFlowSession(["new", "partially_filled", "filled"])
+        broker = _broker_with_session(monkeypatch, session)
+
+        asyncio.run(broker._place_order(_market_buy()))
+
+        assert session.polls == 3
+
+    def test_gives_up_after_the_timeout_without_raising(self, monkeypatch):
+        """E.g. an order sent before the open stays `accepted` until 9:30."""
+        monkeypatch.setattr(alpaca_module, "ORDER_SETTLE_POLL_SECONDS", 0.001)
+        monkeypatch.setattr(alpaca_module, "ORDER_SETTLE_TIMEOUT_SECONDS", 0.01)
+        session = OrderFlowSession(["accepted"])
+        broker = _broker_with_session(monkeypatch, session)
+
+        asyncio.run(broker._place_order(_market_buy()))
+
+        assert session.polls >= 2

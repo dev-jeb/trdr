@@ -5,6 +5,7 @@ from enum import Enum
 from opentelemetry import trace
 
 from ..core.trading_context.trading_context import TradingContext
+from ..core.trading_context.exceptions import MissingContextValue
 from ..core.shared.models import ContextIdentifier
 from ..core.broker.models import Money
 from .lexer import ReservedKeyword
@@ -49,6 +50,9 @@ class BinaryOperator(Enum):
     GREATER = ">"
     LESS = "<"
     EQUAL = "=="
+    GREATER_EQUAL = ">="
+    LESS_EQUAL = "<="
+    NOT_EQUAL = "!="
     PLUS = "+"
     MINUS = "-"
     MULTIPLY = "*"
@@ -67,7 +71,14 @@ class BinaryOperator(Enum):
 # these are recorded as conditions in the trace; arithmetic operators are
 # sub-expressions whose values surface via their parent comparison.
 COMPARISON_OPERATORS = frozenset(
-    {BinaryOperator.GREATER, BinaryOperator.LESS, BinaryOperator.EQUAL}
+    {
+        BinaryOperator.GREATER,
+        BinaryOperator.LESS,
+        BinaryOperator.EQUAL,
+        BinaryOperator.GREATER_EQUAL,
+        BinaryOperator.LESS_EQUAL,
+        BinaryOperator.NOT_EQUAL,
+    }
 )
 
 
@@ -178,6 +189,12 @@ class BinaryExpression(Expression):
             result = left_val < right_val
         elif self.operator == BinaryOperator.EQUAL:
             result = left_val == right_val
+        elif self.operator == BinaryOperator.GREATER_EQUAL:
+            result = left_val >= right_val
+        elif self.operator == BinaryOperator.LESS_EQUAL:
+            result = left_val <= right_val
+        elif self.operator == BinaryOperator.NOT_EQUAL:
+            result = left_val != right_val
         elif self.operator == BinaryOperator.PLUS:
             return left_val + right_val
         elif self.operator == BinaryOperator.MINUS:
@@ -185,6 +202,9 @@ class BinaryExpression(Expression):
         elif self.operator == BinaryOperator.MULTIPLY:
             return left_val * right_val
         elif self.operator == BinaryOperator.DIVIDE:
+            if right_val == 0:
+                # Treat like an unavailable indicator: skip this security, don't abort the run.
+                raise MissingContextValue(f"Division by zero in '{self.describe()}'")
             return left_val / right_val
         else:
             raise ValueError(f"Unsupported operator {self.operator}")

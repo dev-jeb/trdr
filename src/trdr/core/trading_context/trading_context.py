@@ -30,6 +30,7 @@ class TradingContext:
         broker: BaseBroker,
         tracer: trace.Tracer = trace.NoOpTracer(),
         _from_create: bool = False,
+        market_symbol: str | None = None,
     ):
         """
         Initialize a TradingContext instance.
@@ -42,6 +43,7 @@ class TradingContext:
             broker: Broker that manages orders and positions
             tracer: OpenTelemetry tracer for instrumentation
             _from_create: Internal flag to ensure proper initialization flow
+            market_symbol: Benchmark symbol backing the MARKET_* identifiers (see create())
 
         Raises:
             TypeError: If not instantiated through the create() factory method
@@ -54,6 +56,8 @@ class TradingContext:
         self.current_position: Position | None = None
         self.current_security: Security | None = None
         self.symbol_stack: list[str] | None = None
+        self.market_symbol = market_symbol
+        self.market_security: Security | None = None
         self._tracer = tracer
 
     @classmethod
@@ -62,6 +66,7 @@ class TradingContext:
         security_provider: BaseSecurityProvider,
         broker: BaseBroker,
         tracer: trace.Tracer = trace.NoOpTracer(),
+        market_symbol: str | None = None,
     ) -> T:
         """
         Factory method to create and initialize a TradingContext instance.
@@ -73,6 +78,9 @@ class TradingContext:
             security_provider: Provider that supplies securities and market data
             broker: Broker that manages orders and positions
             tracer: OpenTelemetry tracer for instrumentation
+            market_symbol: Optional benchmark (e.g. "SPY") backing the MARKET_* identifiers.
+                The security provider must have data for it. It is used only as a market
+                reference and is removed from the symbols the strategy trades.
 
         Returns:
             A fully initialized TradingContext instance
@@ -81,7 +89,9 @@ class TradingContext:
             Exception: If initialization fails for any reason
         """
         self = cls.__new__(cls)
-        TradingContext.__init__(self, security_provider, broker, tracer, _from_create=True)
+        TradingContext.__init__(
+            self, security_provider, broker, tracer, _from_create=True, market_symbol=market_symbol
+        )
         with self._tracer.start_as_current_span("TradingContext.create") as span:
             try:
                 await self._initialize()
@@ -99,7 +109,11 @@ class TradingContext:
 
         This method is called by the create() factory method during context initialization.
         """
-        self.symbol_stack = await self.security_provider.get_symbols()
+        symbols = await self.security_provider.get_symbols()
+        if self.market_symbol:
+            symbols = [s for s in symbols if s != self.market_symbol]
+            self.market_security = await self.security_provider.get_security(self.market_symbol)
+        self.symbol_stack = symbols
 
     async def next_symbol(self) -> bool:
         """
@@ -294,6 +308,9 @@ class TradingContext:
                         raise error
                     return current_price.amount
 
+                case ContextIdentifier.MARKET_PRICE | ContextIdentifier.MARKET_MA50 | ContextIdentifier.MARKET_MA200:
+                    return self._resolve_market_value(identifier, span)
+
                 case ContextIdentifier.ACCOUNT_EXPOSURE:
                     account_exposure = await self.broker.get_account_exposure()
                     if account_exposure is None:
@@ -397,3 +414,28 @@ class TradingContext:
                     error = ValueError(f"Invalid context identifier: {identifier}")
                     span.record_exception(error)
                     raise error
+
+    def _resolve_market_value(self, identifier: ContextIdentifier, span) -> Decimal:
+        """Resolve a MARKET_* identifier from the benchmark security."""
+        if not self.market_symbol:
+            # A configuration error, not missing data: fail loudly instead of skipping every entry.
+            error = ValueError(
+                f"{identifier.value} needs a benchmark: pass market_symbol to TradingContext.create() "
+                "and include that symbol in the bar provider"
+            )
+            span.record_exception(error)
+            raise error
+        if self.market_security is None:
+            error = MissingContextValue(f"No data for market symbol {self.market_symbol}")
+            span.add_event(str(error))
+            raise error
+        span.set_attribute("market_symbol", self.market_symbol)
+        if identifier == ContextIdentifier.MARKET_PRICE:
+            return self.market_security.current_bar.close.amount
+        period = Timeframe.d50 if identifier == ContextIdentifier.MARKET_MA50 else Timeframe.d200
+        moving_average = self.market_security.compute_moving_average(period)
+        if moving_average is None:
+            error = MissingContextValue(f"{identifier.value} for {self.market_symbol} is not available")
+            span.add_event(str(error))
+            raise error
+        return moving_average.amount

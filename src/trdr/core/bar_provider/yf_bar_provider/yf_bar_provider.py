@@ -1,5 +1,6 @@
 from typing import List, Tuple, Optional
-from datetime import timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 import asyncio
 import yfinance as yf
 import yfinance.shared  # noqa: F401  yfinance>=1.x no longer auto-binds yf.shared; import it so yf.shared._ERRORS resolves
@@ -22,8 +23,21 @@ from ...shared.models import Timeframe
 logger = logging.getLogger("yfinance")
 logger.disabled = True
 
+MARKET_TZ = ZoneInfo("America/New_York")
+# A day's daily bar is treated as final this long after the 16:00 ET close.
+SESSION_SETTLED_AT = time(16, 30)
+# Daily history to fetch: ~275 trading days, enough for MA200 plus crossovers' 1-bar offset.
+HISTORY_CALENDAR_DAYS = 400
+
+
+def _market_now() -> datetime:
+    """Current time in the exchange's timezone (a function so tests can pin the clock)."""
+    return datetime.now(MARKET_TZ)
+
 
 class YFBarProvider(BaseBarProvider):
+    _completed_sessions_only = False
+
     def __init__(
         self,
         *args,
@@ -31,6 +45,52 @@ class YFBarProvider(BaseBarProvider):
     ):
         """Disabled constructor - use YFBarProvider.create() instead."""
         raise TypeError("Use YFBarProvider.create() instead to create a new bar provider")
+
+    @classmethod
+    async def create(
+        cls,
+        symbols: List[str],
+        tracer: Optional[trace.Tracer] = trace.NoOpTracer(),
+        completed_sessions_only: bool = False,
+    ) -> "YFBarProvider":
+        """Create and load a Yahoo Finance bar provider.
+
+        Args:
+            symbols: Tickers to load.
+            tracer: OpenTelemetry tracer.
+            completed_sessions_only: Build every value from finished daily sessions, which is
+                what a daily backtest sees when it decides on a session's close and fills at the
+                next open. The latest completed session becomes the current bar (CURRENT_PRICE is
+                its close, CURRENT_VOLUME its full-day volume) and history ends the session
+                before it. Today's in-progress session is ignored and no intraday data is
+                fetched. Default False keeps the intraday "session so far" current bar.
+        """
+        self = cls.__new__(cls)
+        BaseBarProvider.__init__(self, tracer)
+        self._completed_sessions_only = completed_sessions_only
+        self._current_bars = {}
+        with self._tracer.start_as_current_span("BaseBarProvider.create") as span:
+            span.set_attribute("completed_sessions_only", completed_sessions_only)
+            try:
+                await self._initialize(symbols)
+            except Exception as e:
+                span.record_exception(e)
+                span.set_status(trace.StatusCode.ERROR)
+                raise
+            else:
+                span.set_status(trace.StatusCode.OK)
+        return self
+
+    @staticmethod
+    def _completed_session_bars(bars: List[Bar], now: datetime) -> List[Bar]:
+        """Drop the bar for today's session unless it has settled (see SESSION_SETTLED_AT)."""
+        today = now.date()
+        settled = now.time() >= SESSION_SETTLED_AT
+        return [
+            bar
+            for bar in bars
+            if bar.trading_datetime.trading_date < today or (bar.trading_datetime.trading_date == today and settled)
+        ]
 
     async def _initialize(self, symbols: List[str]) -> None:
         """
@@ -73,10 +133,17 @@ class YFBarProvider(BaseBarProvider):
                 span.set_status(trace.Status(trace.StatusCode.ERROR))
                 raise e
             else:
+                now = _market_now()
                 for symbol in symbols_with_data:
                     try:
                         symbol_data = data.xs(symbol, level=0, axis=1)
                         bars = self._convert_df_to_bars(symbol, symbol_data)
+                        if self._completed_sessions_only:
+                            bars = self._completed_session_bars(bars, now)
+                            if len(bars) < 2:
+                                continue
+                            self._current_bars[symbol] = bars[-1]
+                            bars = bars[:-1]
                         self._data_cache[symbol] = bars
                     except BarConversionException as e:
                         continue
@@ -107,7 +174,7 @@ class YFBarProvider(BaseBarProvider):
         """
         with self._tracer.start_as_current_span("YFBarProvider._fetch_batch_stock_data") as span:
             end_datetime = TradingDateTime.now().timestamp
-            start_datetime = end_datetime - timedelta(days=300)
+            start_datetime = end_datetime - timedelta(days=HISTORY_CALENDAR_DAYS)
             span.set_attribute("total_symbols_to_fetch_data_for", len(symbols))
             span.set_attribute("batch_size", batch_size)
 
@@ -272,6 +339,16 @@ class YFBarProvider(BaseBarProvider):
     async def get_current_bar(self, symbol: str) -> Bar:
         with self._tracer.start_as_current_span("YFBarProvider.get_current_bar") as span:
             span.set_attribute("symbol", symbol)
+            if self._completed_sessions_only:
+                current_bar = self._current_bars.get(symbol)
+                if current_bar is None:
+                    span.set_status(trace.Status(trace.StatusCode.ERROR))
+                    e = NoBarsForSymbolException(symbol)
+                    span.record_exception(e)
+                    raise e
+                span.set_attribute("current_bar.date", current_bar.trading_datetime.trading_date.isoformat())
+                span.set_status(trace.Status(trace.StatusCode.OK))
+                return current_bar
             span.add_event("begin_current_bar_data_fetch")
             data = yf.download(
                 symbol,

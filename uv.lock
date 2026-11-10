@@ -1137,7 +1137,7 @@ wheels = [
 
 [[package]]
 name = "trdr"
-version = "0.0.10"
+version = "0.0.11"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -1145,6 +1145,7 @@ dependencies = [
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
     { name = "pydantic" },
+    { name = "tzdata" },
     { name = "yfinance" },
 ]
 
@@ -1163,6 +1164,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.4.0" },
+    { name = "tzdata", specifier = ">=2024.1" },
     { name = "yfinance", specifier = ">=1.4.1" },
 ]
 provides-extras = ["dev"]

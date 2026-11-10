@@ -1,6 +1,7 @@
 from opentelemetry.trace.status import Status, StatusCode
 from typing import List, Dict
 from collections import defaultdict
+import asyncio
 from datetime import date, datetime, time, timedelta, timezone
 import os
 from decimal import Decimal
@@ -14,6 +15,10 @@ from ...shared.models import TradingDateTime
 DAY_TRADE_WINDOW_BUSINESS_DAYS = 5
 # Alpaca's max page size for GET /v2/orders.
 ALPACA_ORDERS_PAGE_LIMIT = 500
+# After placing an order, wait this long (polling) for it to settle before the engine moves on.
+ORDER_SETTLE_TIMEOUT_SECONDS = 10.0
+ORDER_SETTLE_POLL_SECONDS = 0.5
+TERMINAL_ORDER_STATUSES = frozenset({"filled", "canceled", "expired", "rejected", "done_for_day"})
 
 
 class AlpacaBroker(BaseBroker):
@@ -427,8 +432,38 @@ class AlpacaBroker(BaseBroker):
                     raise Exception(f"Failed to place order: {response.status} {error_text}")
 
                 order_info = await response.json()
-                span.set_status(Status(StatusCode.OK))
-                return
+
+            final_status = await self._await_order_settled(order_info["id"])
+            span.set_attribute("order.id", order_info["id"])
+            span.set_attribute("order.final_status", final_status or "unknown")
+            if final_status not in TERMINAL_ORDER_STATUSES:
+                span.add_event("order_not_settled_before_timeout", {"status": final_status or "unknown"})
+            span.set_status(Status(StatusCode.OK))
+            return
+
+    async def _await_order_settled(self, order_id: str) -> str | None:
+        """Poll an order until it reaches a terminal status or ORDER_SETTLE_TIMEOUT_SECONDS passes.
+
+        Right after an order the engine evaluates the next symbol, sizing it from the broker's
+        cash and positions. A market order normally fills within a second, but a refresh that
+        lands first sizes the next entry off pre-fill cash, and the exposure cap misses this
+        position. The backtest books each fill before its next decision, so wait for the fill.
+        Returns the last status seen (None if it could not be read).
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + ORDER_SETTLE_TIMEOUT_SECONDS
+        status = None
+        while True:
+            async with self._session.get(
+                f"{self._base_url}/v2/orders/{order_id}", headers=self._headers
+            ) as response:
+                if response.status == 200:
+                    status = (await response.json()).get("status")
+                    if status in TERMINAL_ORDER_STATUSES:
+                        return status
+            if loop.time() >= deadline:
+                return status
+            await asyncio.sleep(ORDER_SETTLE_POLL_SECONDS)
 
     async def _cancel_all_orders(self, strategy_name: str) -> None:
         with self._tracer.start_as_current_span("alpaca_broker._cancel_all_orders") as span:

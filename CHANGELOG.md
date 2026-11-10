@@ -2,6 +2,41 @@
 
 All notable changes to `trdr` are documented here.
 
+## 0.0.11
+
+### Added
+- **Market regime identifiers: `MARKET_PRICE`, `MARKET_MA50`, `MARKET_MA200`.** They come
+  from a benchmark passed as `TradingContext.create(..., market_symbol="SPY")` (it must also
+  be in the bar provider), so a strategy can filter on the broad market, e.g.
+  `MARKET_PRICE > MARKET_MA200`. The benchmark is removed from the traded symbols. Using a
+  `MARKET_*` identifier without a `market_symbol` raises, because that is a configuration
+  error rather than missing data.
+- **`YFBarProvider.create(..., completed_sessions_only=True)`** to match a daily backtest that
+  decides on a session's close and fills at the next open. The latest finished session is the
+  current bar (full-day volume), history ends the session before it, today's in-progress bar
+  is ignored, and no intraday data is fetched. A session's bar counts once it is 16:30 ET.
+- **`AlpacaBroker` waits for placed orders to settle** (polls for up to 10s). Before, the
+  next symbol could be evaluated before a market order filled, sizing it off pre-fill cash
+  and leaving the new position out of the exposure cap. A daily backtest books each fill
+  before its next decision.
+
+### Fixed
+- **DSL arithmetic `+`, `-` and `/` now work.** They were documented, and the parser and AST
+  handled them, but the lexer only tokenized `*`. Unary minus (`-ATR14`) is supported, and
+  dividing by zero skips the security (like a missing indicator) instead of aborting the run.
+- **Comparisons `>=`, `<=` and `!=` now work.** Only `>`, `<` and `==` parsed before; an
+  unknown operator such as `=>` is now a clear parse error.
+- **`#` comments.** The README example used them, but the lexer rejected them. A comment-only
+  line's indentation no longer affects blocks.
+- **Lexer line numbers count blank lines.** Blank lines with trailing spaces no longer shift
+  the next line's indentation.
+
+### Changed
+- `YFBarProvider` fetches 400 calendar days of daily history (was 300, about 200 trading days,
+  leaving MA200 crossovers with almost no margin).
+- New dependency: `tzdata`, so the America/New_York session clock works where the OS has no
+  timezone database (e.g. slim container images).
+
 ## 0.0.10
 
 ### Fixed
