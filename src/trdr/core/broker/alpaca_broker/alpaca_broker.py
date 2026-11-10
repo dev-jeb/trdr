@@ -122,11 +122,8 @@ class AlpacaBroker(BaseBroker):
                     span.set_attribute("day_trade_count.source", "account")
                 else:
                     window_start = self._day_trade_window_start(datetime.now(timezone.utc).date())
-                    orders = await self._get_closed_orders_since(
-                        datetime.combine(window_start, time.min, tzinfo=timezone.utc)
-                    )
-                    if len(orders) >= ALPACA_ORDERS_PAGE_LIMIT:
-                        span.add_event("day_trade_orders_truncated", {"orders.count": len(orders)})
+                    window_start_dt = datetime.combine(window_start, time.min, tzinfo=timezone.utc)
+                    orders = await self._list_orders({"status": "closed", "after": window_start_dt.isoformat()})
                     self._day_trade_count = self._count_day_trades(orders, window_start)
                     span.set_attribute("day_trade_count.source", "order_history")
                     span.set_attribute("day_trade_count.window_start", window_start.isoformat())
@@ -173,77 +170,75 @@ class AlpacaBroker(BaseBroker):
             fills[(order["symbol"], fill_date)][side] += 1
         return sum(min(counts["buy"], counts["sell"]) for counts in fills.values())
 
-    async def _get_closed_orders_since(self, after: datetime) -> List[Dict]:
-        """Fetch this account's closed orders (any symbol) submitted after ``after``."""
-        with self._tracer.start_as_current_span("alpaca_broker._get_closed_orders_since") as span:
-            params = {
-                "status": "closed",
-                "after": after.isoformat(),
-                "limit": str(ALPACA_ORDERS_PAGE_LIMIT),
-                "direction": "desc",
-            }
-            span.set_attribute("after", params["after"])
+    async def _list_orders(self, params: Dict[str, str]) -> List[Dict]:
+        """Return every order matching ``params`` (newest first), following Alpaca's pagination.
+
+        GET /v2/orders caps each response at ``ALPACA_ORDERS_PAGE_LIMIT`` and has no cursor, so this
+        pages backwards with ``until``. ``until`` is exclusive, so each request reaches 1 microsecond
+        past the oldest order seen so far (keeping orders that share that timestamp) and the overlap
+        is dropped by order id.
+        """
+        with self._tracer.start_as_current_span("alpaca_broker._list_orders") as span:
+            for key, value in params.items():
+                span.set_attribute(f"params.{key}", value)
+            orders: List[Dict] = []
+            seen_ids: set = set()
+            until: str | None = None
+            pages = 0
             try:
-                async with self._session.get(
-                    f"{self._base_url}/v2/orders", headers=self._headers, params=params
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        span.set_attribute("error.type", "http_error")
-                        span.set_attribute("error.status_code", response.status)
-                        span.set_attribute("error.message", error_text)
-                        span.set_status(
-                            Status(StatusCode.ERROR, f"Failed to get orders: {response.status} {error_text}")
-                        )
-                        raise Exception(f"Failed to get orders: {response.status} {error_text}")
-                    orders = await response.json()
-                    span.set_attribute("orders.count", len(orders))
-                    span.set_status(Status(StatusCode.OK))
-                    return orders
+                while True:
+                    page_params = {**params, "limit": str(ALPACA_ORDERS_PAGE_LIMIT), "direction": "desc"}
+                    if until:
+                        page_params["until"] = until
+                    async with self._session.get(
+                        f"{self._base_url}/v2/orders", headers=self._headers, params=page_params
+                    ) as response:
+                        if response.status != 200:
+                            error_text = await response.text()
+                            span.set_attribute("error.type", "http_error")
+                            span.set_attribute("error.status_code", response.status)
+                            span.set_attribute("error.message", error_text)
+                            span.set_status(
+                                Status(StatusCode.ERROR, f"Failed to get orders: {response.status} {error_text}")
+                            )
+                            raise Exception(f"Failed to get orders: {response.status} {error_text}")
+                        page = await response.json()
+                    pages += 1
+
+                    new_orders = [order for order in page if order["id"] not in seen_ids]
+                    orders.extend(new_orders)
+                    seen_ids.update(order["id"] for order in new_orders)
+                    if len(page) < ALPACA_ORDERS_PAGE_LIMIT:
+                        break
+                    if not new_orders:
+                        # A full page of orders already seen: more than a page share one timestamp.
+                        span.add_event("pagination_stalled", {"until": until})
+                        break
+                    oldest = min(datetime.fromisoformat(order["submitted_at"]) for order in page)
+                    until = (oldest + timedelta(microseconds=1)).isoformat()
+
+                span.set_attribute("pages", pages)
+                span.set_attribute("orders.count", len(orders))
+                span.set_status(Status(StatusCode.OK))
+                return orders
             except Exception as e:
                 span.record_exception(e)
                 span.set_status(Status(StatusCode.ERROR, str(e)))
                 raise
 
-    async def _get_orders(self, symbols: List[str], submitted_after: TradingDateTime | None = None) -> List[Dict]:
+    async def _get_orders(self, symbols: List[str]) -> List[Dict]:
+        """Return every order (any status) for ``symbols``, newest first."""
         with self._tracer.start_as_current_span("alpaca_broker._get_orders") as span:
             span.set_attribute("symbols.count", len(symbols))
             span.set_attribute("symbols", ",".join(symbols))
-
-            try:
-                if not symbols:
-                    span.add_event("no_symbols_provided")
-                    span.set_status(Status(StatusCode.OK))
-                    raise ValueError("No symbols provided")
-
-                if submitted_after:
-                    submitted_after_str = submitted_after.timestamp.strftime("%Y-%m-%dT%H:%M:%S%z")
-                    span.set_attribute("submitted_after", submitted_after_str)
-                    span.add_event("getting_orders_after", {"submitted_after": submitted_after_str})
-                    url = f"{self._base_url}/v2/orders?symbols={",".join(symbols)}&status=all&limit=500&submitted_after={submitted_after_str}"
-                else:
-                    span.add_event("getting_all_orders")
-                    url = f"{self._base_url}/v2/orders?symbols={",".join(symbols)}&status=all&limit=500"
-
-                async with self._session.get(url, headers=self._headers) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        span.set_attribute("error.type", "http_error")
-                        span.set_attribute("error.status_code", response.status)
-                        span.set_attribute("error.message", error_text)
-                        span.set_status(
-                            Status(StatusCode.ERROR, f"Failed to get orders: {response.status} {error_text}")
-                        )
-                        raise Exception(f"Failed to get orders: {response.status} {error_text}")
-
-                    orders = await response.json()
-                    span.set_attribute("orders.count", len(orders))
-                    span.set_status(Status(StatusCode.OK))
-                    return orders
-            except Exception as e:
-                span.record_exception(e)
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                raise
+            if not symbols:
+                span.add_event("no_symbols_provided")
+                span.set_status(Status(StatusCode.ERROR, "No symbols provided"))
+                raise ValueError("No symbols provided")
+            orders = await self._list_orders({"status": "all", "symbols": ",".join(symbols)})
+            span.set_attribute("orders.count", len(orders))
+            span.set_status(Status(StatusCode.OK))
+            return orders
 
     async def _refresh_positions(self):
         with self._tracer.start_as_current_span("alpaca_broker._refresh_positions") as span:
@@ -264,63 +259,30 @@ class AlpacaBroker(BaseBroker):
                             Status(StatusCode.ERROR, f"Failed to get positions: {response.status} {error_text}")
                         )
                         raise Exception(f"Failed to get positions: {response.status} {error_text}")
-
                     list_of_positions = await response.json()
-                    span.set_attribute("positions.count", len(list_of_positions))
 
-                    # Extract symbols from positions
-                    list_of_symbols = [position["symbol"] for position in list_of_positions]
+                span.set_attribute("positions.count", len(list_of_positions))
+                if not list_of_positions:
+                    span.add_event("no_positions_found")
+                    span.set_status(Status(StatusCode.OK))
+                    return
 
-                    if not list_of_symbols:
-                        span.add_event("no_positions_found")
-                        span.set_status(Status(StatusCode.OK))
-                        return
+                # Full order history for the held symbols (all pages)
+                list_of_orders = await self._get_orders([position["symbol"] for position in list_of_positions])
+                span.add_event("processing_orders", {"count": len(list_of_orders)})
 
-                    # Get orders for these positions
-                    list_of_orders = await self._get_orders(list_of_symbols)
-
-                    # Process positions and their orders
-                    while list_of_orders is not None:
-                        span.add_event("processing_batch_of_orders", {"count": len(list_of_orders)})
-
-                        for symbol in list_of_symbols:
-                            # Convert Alpaca orders to our Order model
-                            orders_for_symbol = []
-                            for alpaca_order in [o for o in list_of_orders if o["symbol"] == symbol]:
-                                try:
-                                    order = self._convert_alpaca_order_to_model(alpaca_order)
-                                    orders_for_symbol.append(order)
-                                except Exception as e:
-                                    span.record_exception(e)
-                                    span.add_event("order_conversion_failed", {"symbol": symbol, "error": str(e)})
-                                    raise
-
-                            # Create or update position
-                            existing_position = self._positions.get(symbol, None)
-                            if existing_position:
-                                existing_position.orders.extend(orders_for_symbol)
-                                span.add_event(
-                                    "updated_position", {"symbol": symbol, "orders_added": len(orders_for_symbol)}
-                                )
-                            else:
-                                # Find matching position from Alpaca data
-                                alpaca_position = next((p for p in list_of_positions if p["symbol"] == symbol), None)
-                                if alpaca_position:
-                                    position = self._convert_alpaca_position_to_model(
-                                        alpaca_position, orders_for_symbol
-                                    )
-                                    self._positions[symbol] = position
-                                    span.add_event("created_position", {"symbol": symbol})
-
-                        # Check if we need to paginate (Alpaca API limit is 500 orders per request)
-                        if len(list_of_orders) == 500:
-                            last_order = list_of_orders[-1]
-                            parsed_datetime = datetime.strptime(last_order["submitted_at"], "%Y-%m-%dT%H:%M:%S%z")
-                            submitted_at = TradingDateTime.from_utc(parsed_datetime)
-                            span.add_event("fetching_more_orders", {"after_datetime": str(submitted_at)})
-                            list_of_orders = await self._get_orders(list_of_symbols, submitted_at)
-                        else:
-                            list_of_orders = None
+                for alpaca_position in list_of_positions:
+                    symbol = alpaca_position["symbol"]
+                    orders_for_symbol = []
+                    for alpaca_order in (o for o in list_of_orders if o["symbol"] == symbol):
+                        try:
+                            orders_for_symbol.append(self._convert_alpaca_order_to_model(alpaca_order))
+                        except Exception as e:
+                            span.record_exception(e)
+                            span.add_event("order_conversion_failed", {"symbol": symbol, "error": str(e)})
+                            raise
+                    self._positions[symbol] = self._convert_alpaca_position_to_model(alpaca_position, orders_for_symbol)
+                    span.add_event("created_position", {"symbol": symbol, "orders": len(orders_for_symbol)})
 
                 span.set_status(Status(StatusCode.OK))
             except Exception as e:
@@ -366,8 +328,11 @@ class AlpacaBroker(BaseBroker):
 
                 quantity_requested = Decimal(alpaca_order["qty"])
 
-                filled_price = Decimal(alpaca_order.get("filled_avg_price", None))
-                filled_qty = Decimal(alpaca_order.get("filled_qty", None))
+                # Alpaca sends null for orders that never filled (canceled, rejected, still pending).
+                raw_price = alpaca_order.get("filled_avg_price")
+                raw_qty = alpaca_order.get("filled_qty")
+                filled_price = Decimal(raw_price) if raw_price is not None else None
+                filled_qty = Decimal(raw_qty) if raw_qty is not None else None
 
                 created_at = None
                 if "submitted_at" in alpaca_order and alpaca_order["submitted_at"]:

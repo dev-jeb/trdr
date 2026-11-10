@@ -12,6 +12,16 @@ All notable changes to `trdr` are documented here.
   rolling 5-business-day count from the account's filled orders. It errs high, so PDT
   strategies only get more cautious. If Alpaca does report the field, it is still used. The
   span attribute `day_trade_count.source` (`account` / `order_history`) shows which path ran.
+- **Order history pagination works.** With 500+ orders on held symbols, `_refresh_positions`
+  used to crash: it parsed fractional-second timestamps with a format that has no `%f`. It also
+  sent `submitted_after` (not an Alpaca parameter) while paging in the wrong direction, so a
+  second page would just repeat the first. Orders now come through one helper, `_list_orders`,
+  which pages backwards with `until`, de-dupes by order id, and always terminates. The
+  day-trade count goes through it as well, so its history is no longer capped at 500 orders.
+- **Never-filled orders no longer crash position loading.** Alpaca sends
+  `filled_avg_price: null` for canceled, rejected and pending orders, and
+  `Decimal(None)` raised. Every run cancels pending orders first, so these show up in
+  held symbols' history.
 - **No leaked HTTP session when broker creation fails.** `BaseBroker.create()` now closes its
   `aiohttp` session before re-raising, removing the `Unclosed client session` warnings.
 

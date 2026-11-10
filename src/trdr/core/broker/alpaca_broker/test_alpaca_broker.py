@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -90,12 +90,12 @@ def _stub_alpaca_http(monkeypatch, account: dict, closed_orders: list):
     async def fake_refresh_positions(self):
         self._positions = {}
 
-    async def fake_closed_orders(self, after):
+    async def fake_list_orders(self, params):
         return closed_orders
 
     monkeypatch.setattr(AlpacaBroker, "_get_account_info", fake_account_info)
     monkeypatch.setattr(AlpacaBroker, "_refresh_positions", fake_refresh_positions)
-    monkeypatch.setattr(AlpacaBroker, "_get_closed_orders_since", fake_closed_orders)
+    monkeypatch.setattr(AlpacaBroker, "_list_orders", fake_list_orders)
 
 
 async def _create_and_close() -> AlpacaBroker:
@@ -147,3 +147,139 @@ class TestCreate:
 
         assert len(sessions) == 1 and sessions[0].closed
 
+
+
+# --- Order pagination against a fake GET /v2/orders -------------------------------------------
+
+
+class _FakeResponse:
+    def __init__(self, payload, status: int = 200):
+        self.status, self._payload = status, payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def json(self):
+        return self._payload
+
+    async def text(self):
+        return str(self._payload)
+
+
+class FakeAlpacaSession:
+    """Serves /v2/orders the way Alpaca does: newest first, capped at ``limit``, exclusive
+    ``after``/``until``, filtered by ``symbols``. Also serves /v2/positions."""
+
+    def __init__(self, orders: list, positions: list = ()):
+        self.orders = sorted(orders, key=lambda o: datetime.fromisoformat(o["submitted_at"]), reverse=True)
+        self.positions = list(positions)
+        self.order_requests: list = []
+
+    def get(self, url, headers=None, params=None):
+        if url.endswith("/v2/positions"):
+            return _FakeResponse(self.positions)
+        params = dict(params or {})
+        self.order_requests.append(params)
+        result = self.orders
+        if "symbols" in params:
+            wanted = set(params["symbols"].split(","))
+            result = [o for o in result if o["symbol"] in wanted]
+        if "until" in params:
+            until = datetime.fromisoformat(params["until"])
+            result = [o for o in result if datetime.fromisoformat(o["submitted_at"]) < until]
+        if "after" in params:
+            after = datetime.fromisoformat(params["after"])
+            result = [o for o in result if datetime.fromisoformat(o["submitted_at"]) > after]
+        return _FakeResponse(result[: int(params.get("limit", 50))])
+
+    async def close(self):
+        pass
+
+
+BASE_TS = datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc)
+
+
+def _alpaca_order(i: int, symbol: str = "AAPL", submitted_at: datetime | None = None, **overrides) -> dict:
+    ts = (submitted_at or BASE_TS + timedelta(minutes=i)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    order = {
+        "id": f"order-{i}",
+        "symbol": symbol,
+        "side": "buy",
+        "type": "market",
+        "qty": "1",
+        "filled_qty": "1",
+        "filled_avg_price": "100",
+        "status": "filled",
+        "submitted_at": ts,
+        "filled_at": ts,
+        "client_order_id": f"strategy:{i}",
+    }
+    return {**order, **overrides}
+
+
+def _broker_with_session(monkeypatch, session: FakeAlpacaSession) -> AlpacaBroker:
+    monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setattr(base_broker_module.aiohttp, "ClientSession", lambda: session)
+
+    async def fake_account_info(self):
+        return ACCOUNT_WITHOUT_DAYTRADE_COUNT
+
+    monkeypatch.setattr(AlpacaBroker, "_get_account_info", fake_account_info)
+    # Not via the context manager: that would close (and drop) the session the tests still use.
+    return asyncio.run(AlpacaBroker.create(pdt_strategy=NunStrategy.create()))
+
+
+class TestOrderPagination:
+    def test_follows_pages_until_history_is_exhausted(self, monkeypatch):
+        """Regression: a full 500-order page crashed on strptime and never fetched page two."""
+        session = FakeAlpacaSession([_alpaca_order(i) for i in range(1234)])
+        broker = _broker_with_session(monkeypatch, session)
+        session.order_requests.clear()
+
+        orders = asyncio.run(broker._list_orders({"status": "all", "symbols": "AAPL"}))
+
+        assert len(orders) == 1234
+        assert len({o["id"] for o in orders}) == 1234
+        assert len(session.order_requests) == 3
+        assert "until" not in session.order_requests[0] and "until" in session.order_requests[1]
+
+    def test_keeps_orders_that_share_the_page_boundary_timestamp(self, monkeypatch):
+        boundary = BASE_TS - timedelta(days=1)
+        orders = [_alpaca_order(i) for i in range(499)]
+        orders += [_alpaca_order(1000, submitted_at=boundary), _alpaca_order(1001, submitted_at=boundary)]
+        session = FakeAlpacaSession(orders)
+        broker = _broker_with_session(monkeypatch, session)
+
+        fetched = asyncio.run(broker._list_orders({"status": "all"}))
+
+        assert {o["id"] for o in fetched} >= {"order-1000", "order-1001"}
+        assert len(fetched) == 501
+
+    def test_stops_when_a_page_brings_nothing_new(self, monkeypatch):
+        same_instant = [_alpaca_order(i, submitted_at=BASE_TS) for i in range(600)]
+        session = FakeAlpacaSession(same_instant)
+        broker = _broker_with_session(monkeypatch, session)
+        session.order_requests.clear()
+
+        fetched = asyncio.run(broker._list_orders({"status": "all"}))
+
+        assert len(fetched) == 500  # can't page past 500 identical timestamps, but must not loop
+        assert len(session.order_requests) == 2
+
+    def test_refresh_positions_attaches_full_order_history(self, monkeypatch):
+        history = [_alpaca_order(i) for i in range(600)]
+        # Every run cancels pending orders first, so held symbols accumulate never-filled orders,
+        # which Alpaca returns with null filled_avg_price. Regression: Decimal(None) crashed create().
+        history.append(
+            _alpaca_order(9999, status="canceled", filled_qty="0", filled_avg_price=None, filled_at=None)
+        )
+        session = FakeAlpacaSession(history, positions=[{"symbol": "AAPL"}])
+
+        broker = _broker_with_session(monkeypatch, session)
+
+        assert len(broker._positions["AAPL"].orders) == 601
