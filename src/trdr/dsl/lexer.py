@@ -24,6 +24,7 @@ class ReservedKeyword(str, Enum):
     CROSSED_ABOVE = "CROSSED_ABOVE"
     CROSSED_BELOW = "CROSSED_BELOW"
     DOLLAR_AMOUNT = "DOLLAR_AMOUNT"
+    RANK = "RANK"
 
 
 # Valid identifiers include both context identifiers and reserved keywords

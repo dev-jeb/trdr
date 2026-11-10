@@ -8,6 +8,7 @@ from .dsl_ast import (
     BinaryExpression,
     BinaryOperator,
     CrossoverExpression,
+    RankExpression,
     AllOf,
     AnyOf,
     Sizing,
@@ -215,6 +216,13 @@ class Parser:
         elif token.type == TokenType.STRING:
             self.advance()
             return Literal(token.value.strip('"'))
+        elif token.type == TokenType.IDENTIFIER and token.value.upper() == ReservedKeyword.RANK:
+            # RANK(<arithmetic>): this symbol's rank of the value across the universe, 1 = largest
+            self.advance()
+            self.expect(TokenType.LEFT_PAREN)
+            inner = self.parse_arithmetic()
+            self.expect(TokenType.RIGHT_PAREN)
+            return RankExpression(inner)
         elif token.type == TokenType.IDENTIFIER:
             self.advance()
             return Identifier(token.value)

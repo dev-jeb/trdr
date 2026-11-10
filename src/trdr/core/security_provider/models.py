@@ -245,6 +245,27 @@ class Security(BaseModel):
 
         return (macd_line, signal_line, histogram)
 
+    def compute_return(self, sessions: int) -> Decimal | None:
+        """Fractional return from the close `sessions` bars ago to the current close (0.05 = +5%)."""
+        if len(self.bars) < sessions:
+            return None
+        start = self.bars[-sessions].close.amount
+        if start == 0:
+            return None
+        return self.current_bar.close.amount / start - 1
+
+    def compute_volatility(self, sessions: int) -> Decimal | None:
+        """Annualized standard deviation of the last `sessions` daily close-to-close returns."""
+        if len(self.bars) < sessions:
+            return None
+        closes = [bar.close.amount for bar in self.bars[-sessions:]] + [self.current_bar.close.amount]
+        if any(c == 0 for c in closes[:-1]):
+            return None
+        returns = [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes))]
+        mean = sum(returns) / len(returns)
+        variance = sum((r - mean) ** 2 for r in returns) / (len(returns) - 1)
+        return variance.sqrt() * Decimal(252).sqrt()
+
     def compute_atr(self, period_days: int, offset: int = 0) -> Decimal | None:
         """Compute Average True Range over the given period."""
         bars = self.bars

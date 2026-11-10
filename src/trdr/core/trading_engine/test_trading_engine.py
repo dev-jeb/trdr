@@ -89,3 +89,65 @@ def test_no_sizing_rule_match_does_not_abort_run(mock_trading_context):
     execute_span = next(s for s in spans if s.name == "TradingEngine.execute")
     assert execute_span.attributes["signals.entry"] == 0
     assert execute_span.attributes["securities.skipped"] == 2
+
+
+def test_exits_run_before_entries_and_sold_symbols_are_not_rebought():
+    """Rotation: with one slot, AAA (first in the list) can only enter after BBB (held) exits."""
+    from types import SimpleNamespace
+    from ..shared.models import Money
+
+    class FakeContext:
+        def __init__(self):
+            self.universe = ["AAA", "BBB"]
+            self.holdings = {"BBB": Decimal(10)}
+            self.orders = []
+            self.broker = SimpleNamespace(cancel_all_orders=self._noop, place_order=self._place)
+            self.symbol_stack = []
+
+        async def _noop(self, **kwargs):
+            pass
+
+        async def _place(self, order):
+            self.orders.append((order.side.name, order.symbol))
+            if order.side.name == "SELL":
+                self.holdings.pop(order.symbol)
+            else:
+                self.holdings[order.symbol] = order.quantity_requested
+
+        def rewind(self):
+            self.symbol_stack = list(self.universe)
+
+        async def next_symbol(self):
+            if not self.symbol_stack:
+                return False
+            self.current_symbol = self.symbol_stack.pop(0)
+            size = self.holdings.get(self.current_symbol)
+            self.current_position = SimpleNamespace(get_size_for_strategy=lambda name, s=size: s) if size else None
+            self.current_security = SimpleNamespace(
+                current_bar=SimpleNamespace(close=Money(amount=Decimal(100)))
+            )
+            return True
+
+    class OneSlotAST:
+        def __init__(self, context):
+            self.context = context
+
+        async def evaluate_exit(self, context):
+            return True
+
+        async def evaluate_entry(self, context):
+            return True
+
+        async def evaluate_sizing(self, context):
+            if self.context.holdings:
+                raise NoSizingRuleMatched("slot taken")
+            return Decimal(1000)
+
+    context = FakeContext()
+    engine, _ = _engine_with_inmemory_tracer(context)
+    engine.strategy_ast = OneSlotAST(context)
+
+    counts = asyncio.run(engine.execute())
+
+    assert context.orders == [("SELL", "BBB"), ("BUY", "AAA")]  # BBB not re-bought this run
+    assert counts["exit"] == 1 and counts["entry"] == 1

@@ -263,7 +263,27 @@ class ContextIdentifier(str, Enum):
     MARKET_MA50 = "MARKET_MA50"  # benchmark's 50-day moving average
     MARKET_MA200 = "MARKET_MA200"  # benchmark's 200-day moving average
 
+    # Returns and volatility (from security provider), for ranking and trend rules
+    RETURN_5D = "RETURN_5D"  # fractional return over the last 5 sessions (0.05 = +5%)
+    RETURN_21D = "RETURN_21D"  # ~1 month
+    RETURN_63D = "RETURN_63D"  # ~3 months
+    RETURN_126D = "RETURN_126D"  # ~6 months
+    RETURN_252D = "RETURN_252D"  # ~12 months
+    VOLATILITY_21D = "VOLATILITY_21D"  # annualized std dev of daily returns, last 21 sessions (0.25 = 25%)
+    VOLATILITY_63D = "VOLATILITY_63D"  # same over the last 63 sessions
+
+    # Universe (from trading context)
+    UNIVERSE_SIZE = "UNIVERSE_SIZE"  # number of tradable symbols with data this run
+
+    # Calendar: the decision session's date (the current bar's), same for every security
+    DAY_OF_WEEK = "DAY_OF_WEEK"  # 1 = Monday ... 5 = Friday
+    DAY_OF_MONTH = "DAY_OF_MONTH"  # 1..31
+    MONTH = "MONTH"  # 1..12
+    TRADING_DAY_OF_MONTH = "TRADING_DAY_OF_MONTH"  # 1 = first session of the month
+    TRADING_DAYS_LEFT_IN_MONTH = "TRADING_DAYS_LEFT_IN_MONTH"  # 0 = last session of the month
+
     # Account data (from broker)
+    ACCOUNT_EQUITY = "ACCOUNT_EQUITY"  # Total account value (cash + positions), for equal-weight sizing
     ACCOUNT_EXPOSURE = "ACCOUNT_EXPOSURE"  # Ratio of invested funds to total capital
     NUMBER_OF_OPEN_POSITIONS = "NUMBER_OF_OPEN_POSITIONS"  # Count of currently held positions
     AVAILABLE_CASH = "AVAILABLE_CASH"  # Current cash available for trading

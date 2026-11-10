@@ -117,153 +117,130 @@ class TradingEngine:
         """Generate a client_order_id encoding the strategy name."""
         return f"{self.strategy_file_name}:{uuid.uuid4().hex[:8]}"
 
-    async def execute(self) -> None:
+    async def execute(self) -> dict:
         """
         Execute the trading strategy across all available securities.
 
         Each strategy only manages its own positions, identified via client_order_id
         tagging. A strategy will only exit shares it bought, and can enter a position
         on a symbol even if another strategy already holds shares in it.
+
+        Runs in two passes: exits for every held symbol first, then entries. A rotation
+        strategy (top-N by rank, an asset-allocation model) frees slots and cash before
+        deciding what to buy, regardless of symbol order. A symbol sold this run is not
+        re-bought in the same run.
         """
         with self._tracer.start_as_current_span("TradingEngine.execute") as span:
             try:
                 span.add_event("canceling_pending_orders_for_strategy")
                 await self.trading_context.broker.cancel_all_orders(strategy_name=self.strategy_file_name)
 
-                processed_count = 0
-                skipped_count = 0
-                exit_signals = 0
-                entry_signals = 0
-                rejected_count = 0
+                counts = {"processed": 0, "skipped": 0, "entry": 0, "exit": 0, "rejected": 0}
+                exited_this_run: set[str] = set()
 
-                while await self.trading_context.next_symbol():
-                    with self._tracer.start_as_current_span("Strategy.process_security") as security_span:
-                        security_span.set_attribute("symbol", self.trading_context.current_symbol)
-                        security_span.set_attribute("strategy_name", self.strategy_file_name)
-
-                        # Determine this strategy's share count in the current position
+                for phase in ("exit", "entry"):
+                    self.trading_context.rewind()
+                    while await self.trading_context.next_symbol():
+                        symbol = self.trading_context.current_symbol
                         position = self.trading_context.current_position
                         strategy_size = (
-                            position.get_size_for_strategy(self.strategy_file_name)
-                            if position
-                            else Decimal(0)
+                            position.get_size_for_strategy(self.strategy_file_name) if position else Decimal(0)
                         )
-                        security_span.set_attribute("strategy_size", float(strategy_size))
+                        if phase == "exit" and strategy_size <= 0:
+                            continue
+                        if phase == "entry" and (strategy_size > 0 or symbol in exited_this_run):
+                            continue
 
-                        if strategy_size > 0:
-                            # This strategy owns shares — evaluate exit
-                            security_span.add_event("evaluating_exit_conditions")
-                            try:
-                                should_exit = await self.strategy_ast.evaluate_exit(self.trading_context)
-                                security_span.set_attribute("exit_signal", should_exit)
+                        with self._tracer.start_as_current_span("Strategy.process_security") as security_span:
+                            security_span.set_attribute("symbol", symbol)
+                            security_span.set_attribute("strategy_name", self.strategy_file_name)
+                            security_span.set_attribute("strategy_size", float(strategy_size))
+                            security_span.set_attribute("phase", phase)
+                            if phase == "exit":
+                                outcome = await self._process_exit(security_span, strategy_size)
+                                if outcome == "exit":
+                                    exited_this_run.add(symbol)
+                            else:
+                                outcome = await self._process_entry(security_span)
+                            if outcome in counts:
+                                counts[outcome] += 1
+                            if outcome != "skipped":
+                                counts["processed"] += 1
+                            security_span.set_status(trace.StatusCode.OK)
 
-                                if should_exit:
-                                    order = Order(
-                                        symbol=self.trading_context.current_symbol,
-                                        side=OrderSide.SELL,
-                                        quantity_requested=strategy_size,
-                                        status=OrderStatus.PENDING,
-                                        type=OrderType.MARKET,
-                                        created_at=TradingDateTime.now(),
-                                        current_price=self.trading_context.current_security.current_bar.close,
-                                        client_order_id=self._generate_client_order_id(),
-                                        strategy_name=self.strategy_file_name,
-                                    )
-
-                                    security_span.add_event("placing_sell_order")
-                                    try:
-                                        await self.trading_context.broker.place_order(order)
-                                        exit_signals += 1
-                                    except ORDER_REJECTIONS as e:
-                                        security_span.add_event(
-                                            "order_rejected",
-                                            attributes={
-                                                "side": "SELL",
-                                                "reason": type(e).__name__,
-                                                "detail": str(e),
-                                            },
-                                        )
-                                        rejected_count += 1
-
-                            except MissingContextValue:
-                                security_span.add_event("missing_context_value_for_exit")
-                                skipped_count += 1
-                                continue
-
-                        else:
-                            # This strategy has no shares — evaluate entry
-                            security_span.add_event("evaluating_entry_conditions")
-                            try:
-                                should_enter = await self.strategy_ast.evaluate_entry(self.trading_context)
-                                security_span.set_attribute("entry_signal", should_enter)
-
-                                if should_enter:
-                                    security_span.add_event("evaluating_sizing")
-                                    dollar_amount = await self.strategy_ast.evaluate_sizing(self.trading_context)
-                                    security_span.set_attribute("dollar_amount_requested", float(dollar_amount))
-
-                                    number_of_shares = int(
-                                        dollar_amount // self.trading_context.current_security.current_bar.close.amount
-                                    )
-                                    security_span.set_attribute("number_of_shares_requested", number_of_shares)
-
-                                    order = Order(
-                                        symbol=self.trading_context.current_symbol,
-                                        side=OrderSide.BUY,
-                                        quantity_requested=number_of_shares,
-                                        status=OrderStatus.PENDING,
-                                        type=OrderType.MARKET,
-                                        created_at=TradingDateTime.now(),
-                                        current_price=self.trading_context.current_security.current_bar.close,
-                                        client_order_id=self._generate_client_order_id(),
-                                        strategy_name=self.strategy_file_name,
-                                    )
-
-                                    security_span.add_event("placing_buy_order")
-                                    try:
-                                        await self.trading_context.broker.place_order(order)
-                                        entry_signals += 1
-                                    except ORDER_REJECTIONS as e:
-                                        security_span.add_event(
-                                            "order_rejected",
-                                            attributes={
-                                                "side": "BUY",
-                                                "reason": type(e).__name__,
-                                                "detail": str(e),
-                                            },
-                                        )
-                                        rejected_count += 1
-
-                            except MissingContextValue:
-                                security_span.add_event("missing_context_value_for_entry")
-                                skipped_count += 1
-                                continue
-                            except NoSizingRuleMatched:
-                                # No sizing rule applied (e.g. over exposure cap): skip this
-                                # one entry, but let exits and the rest of the universe run.
-                                security_span.add_event("entry_skipped_no_sizing_rule")
-                                skipped_count += 1
-                                continue
-
-                        processed_count += 1
-                        security_span.set_status(trace.StatusCode.OK)
-
-                span.set_attribute("securities.processed", processed_count)
-                span.set_attribute("securities.skipped", skipped_count)
-                span.set_attribute("signals.exit", exit_signals)
-                span.set_attribute("signals.entry", entry_signals)
-                span.set_attribute("orders.rejected", rejected_count)
+                span.set_attribute("securities.processed", counts["processed"])
+                span.set_attribute("securities.skipped", counts["skipped"])
+                span.set_attribute("signals.exit", counts["exit"])
+                span.set_attribute("signals.entry", counts["entry"])
+                span.set_attribute("orders.rejected", counts["rejected"])
                 span.set_status(trace.StatusCode.OK)
-
-                return {
-                    "processed": processed_count,
-                    "skipped": skipped_count,
-                    "entry": entry_signals,
-                    "exit": exit_signals,
-                    "rejected": rejected_count,
-                }
+                return counts
 
             except Exception as e:
                 span.record_exception(e)
                 span.set_status(trace.StatusCode.ERROR)
                 raise
+
+    async def _process_exit(self, security_span, strategy_size: Decimal) -> str:
+        """Evaluate EXIT for a held symbol. Returns 'exit', 'rejected', 'skipped' or 'hold'."""
+        security_span.add_event("evaluating_exit_conditions")
+        try:
+            should_exit = await self.strategy_ast.evaluate_exit(self.trading_context)
+        except MissingContextValue:
+            security_span.add_event("missing_context_value_for_exit")
+            return "skipped"
+        security_span.set_attribute("exit_signal", should_exit)
+        if not should_exit:
+            return "hold"
+        order = self._market_order(OrderSide.SELL, strategy_size)
+        security_span.add_event("placing_sell_order")
+        return await self._submit(order, security_span, success="exit")
+
+    async def _process_entry(self, security_span) -> str:
+        """Evaluate ENTRY (and sizing) for an unheld symbol. Returns 'entry', 'rejected', 'skipped' or 'pass'."""
+        security_span.add_event("evaluating_entry_conditions")
+        try:
+            should_enter = await self.strategy_ast.evaluate_entry(self.trading_context)
+            security_span.set_attribute("entry_signal", should_enter)
+            if not should_enter:
+                return "pass"
+            security_span.add_event("evaluating_sizing")
+            dollar_amount = await self.strategy_ast.evaluate_sizing(self.trading_context)
+        except MissingContextValue:
+            security_span.add_event("missing_context_value_for_entry")
+            return "skipped"
+        except NoSizingRuleMatched:
+            # No sizing rule applied (e.g. over exposure cap): skip this one entry, but let
+            # exits and the rest of the universe run.
+            security_span.add_event("entry_skipped_no_sizing_rule")
+            return "skipped"
+        security_span.set_attribute("dollar_amount_requested", float(dollar_amount))
+        number_of_shares = int(dollar_amount // self.trading_context.current_security.current_bar.close.amount)
+        security_span.set_attribute("number_of_shares_requested", number_of_shares)
+        order = self._market_order(OrderSide.BUY, number_of_shares)
+        security_span.add_event("placing_buy_order")
+        return await self._submit(order, security_span, success="entry")
+
+    def _market_order(self, side: OrderSide, quantity) -> Order:
+        return Order(
+            symbol=self.trading_context.current_symbol,
+            side=side,
+            quantity_requested=quantity,
+            status=OrderStatus.PENDING,
+            type=OrderType.MARKET,
+            created_at=TradingDateTime.now(),
+            current_price=self.trading_context.current_security.current_bar.close,
+            client_order_id=self._generate_client_order_id(),
+            strategy_name=self.strategy_file_name,
+        )
+
+    async def _submit(self, order: Order, security_span, success: str) -> str:
+        try:
+            await self.trading_context.broker.place_order(order)
+            return success
+        except ORDER_REJECTIONS as e:
+            security_span.add_event(
+                "order_rejected",
+                attributes={"side": order.side.name, "reason": type(e).__name__, "detail": str(e)},
+            )
+            return "rejected"

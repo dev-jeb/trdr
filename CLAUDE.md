@@ -58,6 +58,17 @@ uv run pytest src/trdr/path/to/test_file.py::TestClass::test_method
 ### Market Regime (benchmark passed as `TradingContext.create(..., market_symbol="SPY")`)
 - `MARKET_PRICE`, `MARKET_MA50`, `MARKET_MA200`
 
+### Returns, Volatility, Ranking
+- `RETURN_5D`, `RETURN_21D`, `RETURN_63D`, `RETURN_126D`, `RETURN_252D` (fraction, 0.05 = +5%)
+- `VOLATILITY_21D`, `VOLATILITY_63D` (annualized std dev of daily returns), `UNIVERSE_SIZE`
+- `RANK(expr)`: rank across the universe, 1 = largest (`RANK(-VOLATILITY_63D)` = least volatile first)
+
+### Calendar (decision session's date; pass `sessions=` for holiday-aware counts)
+- `DAY_OF_WEEK` (1=Mon), `DAY_OF_MONTH`, `MONTH`, `TRADING_DAY_OF_MONTH` (1=first), `TRADING_DAYS_LEFT_IN_MONTH` (0=last)
+
+### Account
+- `ACCOUNT_EQUITY` (for equal-weight sizing: `(ACCOUNT_EQUITY / 10)`)
+
 ### Operators
 - Crossovers: `CROSSED_ABOVE`, `CROSSED_BELOW` (MA identifiers only)
 - Logic: `ALL_OF`, `ANY_OF`

@@ -204,11 +204,49 @@ PERCENT_CHANGE  # Daily percent change
 ### Account Metrics
 
 ```
+ACCOUNT_EQUITY           # Total account value (cash + positions), e.g. (ACCOUNT_EQUITY / 10) for equal weight
 ACCOUNT_EXPOSURE         # Percentage of account exposed to market
 AVAILABLE_CASH           # Available cash for trading
 AVERAGE_COST             # Average cost of current position
 NUMBER_OF_OPEN_POSITIONS # Number of currently open positions
 ```
+
+### Returns, Volatility and Ranking
+
+```
+RETURN_5D RETURN_21D RETURN_63D RETURN_126D RETURN_252D   # fractional return over N sessions (0.05 = +5%)
+VOLATILITY_21D VOLATILITY_63D                             # annualized std dev of daily returns
+UNIVERSE_SIZE                                             # tradable symbols with data this run
+RANK(expression)                                          # this symbol's rank across the universe, 1 = largest
+```
+
+`RANK` makes cross-sectional strategies possible: compare each symbol with the rest of the
+universe instead of judging it alone.
+
+```
+RANK((RETURN_252D + 1) / (RETURN_21D + 1)) <= 10   # top 10 by 12-1 month momentum
+RANK(-VOLATILITY_63D) <= 10                        # the 10 least volatile
+RANK(RETURN_126D) <= (UNIVERSE_SIZE * 0.2)         # top quintile
+```
+
+The engine runs exits before entries each run, so a rotation strategy frees slots and cash before
+it buys. A symbol sold in a run is not re-bought in that run.
+
+### Calendar
+
+The decision session's date (the current bar's), the same for every security:
+
+```
+DAY_OF_WEEK                  # 1 = Monday ... 5 = Friday
+DAY_OF_MONTH  MONTH
+TRADING_DAY_OF_MONTH         # 1 = first session of the month
+TRADING_DAYS_LEFT_IN_MONTH   # 0 = last session of the month
+```
+
+Pass the exchange's session dates (`TradingContext.create(..., sessions=[...])`) so the trading-day
+counts skip holidays; without them, weekdays are counted. With a daily backtest or
+`completed_sessions_only`, orders decided on a session fill at the next open: entering when
+`TRADING_DAYS_LEFT_IN_MONTH == 1` holds from the open of the month's last session.
 
 ### Market Regime
 
@@ -221,8 +259,8 @@ MARKET_MA50     # Benchmark's 50-day moving average
 MARKET_MA200    # Benchmark's 200-day moving average
 ```
 
-Pass the benchmark to the context and include it in the bar provider; it is used only as a
-reference and is not traded:
+Pass the benchmark to the context and include it in the bar provider. It is not traded unless
+you list it in `universe`:
 
 ```python
 bar_provider = await YFBarProvider.create(symbols + ["SPY"])

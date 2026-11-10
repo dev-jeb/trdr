@@ -2,6 +2,43 @@
 
 All notable changes to `trdr` are documented here.
 
+## 0.0.12
+
+New building blocks for three strategy classes that the DSL could not express before:
+cross-sectional ranking, multi-asset allocation and calendar effects.
+
+### Added
+- **`RANK(expr)`**: the current symbol's rank of any arithmetic expression across the
+  trading universe (1 = largest; negate for smallest-first). Each symbol's value is computed
+  once per run; symbols without a value are left out. Examples: `RANK(RETURN_252D) <= 10`,
+  `RANK(-VOLATILITY_63D) <= 10`, `RANK((RETURN_252D + 1) / (RETURN_21D + 1)) <= 10`
+  (12-1 momentum).
+- **Returns and volatility:** `RETURN_5D/21D/63D/126D/252D` (fractional N-session return) and
+  `VOLATILITY_21D/63D` (annualized std dev of daily returns). `UNIVERSE_SIZE`.
+- **Calendar:** `DAY_OF_WEEK`, `DAY_OF_MONTH`, `MONTH`, `TRADING_DAY_OF_MONTH`,
+  `TRADING_DAYS_LEFT_IN_MONTH`, from the decision session's date. Trading-day counts use
+  `TradingContext.create(sessions=...)` (exchange calendar); without it they count weekdays.
+- **`ACCOUNT_EQUITY`**, for equal-weight sizing such as `(ACCOUNT_EQUITY / 10)`. Before, only
+  `AVAILABLE_CASH` existed, so equal weights had to be approximated.
+- **`TradingContext.create(universe=[...])`**: the explicit list of symbols to trade and rank,
+  in order. The market benchmark can now also be traded (e.g. SPY in an ETF allocation) by
+  listing it.
+
+### Changed
+- **The engine runs exits before entries.** `TradingEngine.execute` makes an exit pass over
+  held symbols, then an entry pass. Before, symbols were handled in list order, so in a
+  rotation strategy a buy early in the list was blocked by a "max positions" rule even when a
+  sell later in the list freed the slot that same run. A symbol sold in a run is not re-bought
+  in it (no same-run round trips). Per-run counts are unchanged.
+- `TradingContext` caches each symbol's `Security` for the run (the entry pass and `RANK` reuse
+  it).
+- Condition descriptions in traces parenthesize nested arithmetic: `(a + b) * c`.
+
+### Fixed
+- **`AlpacaBroker` waits up to 60s for an order to settle** (was 10s). On 2026-11-10, paper
+  orders sent at 9:35:41 and 9:35:50 both filled at 9:36:09, so the 10s wait timed out and
+  the second order was sized from pre-fill cash.
+
 ## 0.0.11
 
 ### Added

@@ -166,6 +166,29 @@ class Identifier(Expression):
         return tree_line("Identifier", str(self.context_identifier), indent)
 
 
+class RankExpression(Expression):
+    """RANK(expr): the current symbol's rank of `expr` across the trading universe (1 = largest).
+
+    E.g. `RANK(RETURN_252D) <= 10` holds for the ten best 12-month performers, and
+    `RANK(-VOLATILITY_63D) <= 10` for the ten least volatile. Evaluated by the trading context,
+    which computes `expr` for every symbol once per run.
+    """
+
+    def __init__(self, expression: Expression):
+        self.expression = expression
+
+    async def evaluate(self, context: Optional[TradingContext]) -> Decimal:
+        if not context:
+            raise ValueError("Context is required for RANK evaluation")
+        return await context.rank(self.expression)
+
+    def describe(self) -> str:
+        return f"RANK({self.expression.describe()})"
+
+    def to_pretty_string(self, indent: int = 0) -> str:
+        return tree_line("Rank", self.describe(), indent)
+
+
 class BinaryExpression(Expression):
     def __init__(self, left: Expression, operator: Union[str, BinaryOperator], right: Expression):
         self.left = left
@@ -215,7 +238,14 @@ class BinaryExpression(Expression):
         return result
 
     def describe(self) -> str:
-        return f"{self.left.describe()} {self.operator.value} {self.right.describe()}"
+        return f"{self._describe_operand(self.left)} {self.operator.value} {self._describe_operand(self.right)}"
+
+    @staticmethod
+    def _describe_operand(operand: "Expression") -> str:
+        # Parenthesize nested arithmetic so the description is unambiguous: (a + b) * c, not a + b * c.
+        if isinstance(operand, BinaryExpression) and operand.operator not in COMPARISON_OPERATORS:
+            return f"({operand.describe()})"
+        return operand.describe()
 
     def to_pretty_string(self, indent: int = 0) -> str:
         base = "    " * indent

@@ -1,4 +1,7 @@
-from typing import Type, TypeVar
+import calendar
+import copy
+from datetime import date, timedelta
+from typing import Any, Type, TypeVar
 from decimal import Decimal
 from opentelemetry import trace
 
@@ -31,6 +34,8 @@ class TradingContext:
         tracer: trace.Tracer = trace.NoOpTracer(),
         _from_create: bool = False,
         market_symbol: str | None = None,
+        universe: list[str] | None = None,
+        sessions: list[date] | None = None,
     ):
         """
         Initialize a TradingContext instance.
@@ -44,6 +49,8 @@ class TradingContext:
             tracer: OpenTelemetry tracer for instrumentation
             _from_create: Internal flag to ensure proper initialization flow
             market_symbol: Benchmark symbol backing the MARKET_* identifiers (see create())
+            universe: Explicit tradable symbols (see create())
+            sessions: Exchange session dates for the calendar identifiers (see create())
 
         Raises:
             TypeError: If not instantiated through the create() factory method
@@ -58,6 +65,11 @@ class TradingContext:
         self.symbol_stack: list[str] | None = None
         self.market_symbol = market_symbol
         self.market_security: Security | None = None
+        self.universe = list(universe) if universe is not None else None
+        self.sessions = sorted(set(sessions)) if sessions else None
+        self.universe_symbols: list[str] = []
+        self._security_cache: dict[str, Security | None] = {}
+        self._rank_cache: dict[int, dict[str, Decimal]] = {}
         self._tracer = tracer
 
     @classmethod
@@ -67,6 +79,8 @@ class TradingContext:
         broker: BaseBroker,
         tracer: trace.Tracer = trace.NoOpTracer(),
         market_symbol: str | None = None,
+        universe: list[str] | None = None,
+        sessions: list[date] | None = None,
     ) -> T:
         """
         Factory method to create and initialize a TradingContext instance.
@@ -80,7 +94,13 @@ class TradingContext:
             tracer: OpenTelemetry tracer for instrumentation
             market_symbol: Optional benchmark (e.g. "SPY") backing the MARKET_* identifiers.
                 The security provider must have data for it. It is used only as a market
-                reference and is removed from the symbols the strategy trades.
+                reference and, unless it is listed in `universe`, is not traded.
+            universe: The symbols to trade (and to rank with RANK), in this order. Symbols the
+                provider has no data for are left out. Default: every provider symbol except
+                market_symbol.
+            sessions: Exchange session dates covering at least the current month, so
+                TRADING_DAY_OF_MONTH / TRADING_DAYS_LEFT_IN_MONTH account for holidays. Without
+                them those identifiers count weekdays.
 
         Returns:
             A fully initialized TradingContext instance
@@ -90,7 +110,14 @@ class TradingContext:
         """
         self = cls.__new__(cls)
         TradingContext.__init__(
-            self, security_provider, broker, tracer, _from_create=True, market_symbol=market_symbol
+            self,
+            security_provider,
+            broker,
+            tracer,
+            _from_create=True,
+            market_symbol=market_symbol,
+            universe=universe,
+            sessions=sessions,
         )
         with self._tracer.start_as_current_span("TradingContext.create") as span:
             try:
@@ -109,11 +136,58 @@ class TradingContext:
 
         This method is called by the create() factory method during context initialization.
         """
-        symbols = await self.security_provider.get_symbols()
+        provider_symbols = await self.security_provider.get_symbols()
+        if self.universe is not None:
+            available = set(provider_symbols)
+            symbols = [s for s in self.universe if s in available]
+        else:
+            symbols = [s for s in provider_symbols if s != self.market_symbol]
         if self.market_symbol:
-            symbols = [s for s in symbols if s != self.market_symbol]
-            self.market_security = await self.security_provider.get_security(self.market_symbol)
-        self.symbol_stack = symbols
+            self.market_security = await self._get_security(self.market_symbol)
+        self.universe_symbols = symbols
+        self.symbol_stack = list(symbols)
+
+    def rewind(self) -> None:
+        """Restart iteration over the universe (the engine makes an exit pass, then an entry pass)."""
+        self.symbol_stack = list(self.universe_symbols)
+        self.current_symbol = None
+        self.current_position = None
+        self.current_security = None
+
+    async def _get_security(self, symbol: str) -> Security | None:
+        """A symbol's Security, built once per context (i.e. per run) and reused."""
+        if symbol not in self._security_cache:
+            self._security_cache[symbol] = await self.security_provider.get_security(symbol)
+        return self._security_cache[symbol]
+
+    async def rank(self, expression: Any) -> Decimal:
+        """Rank of the current symbol's value of `expression` across the universe (1 = largest).
+
+        Each symbol's value is computed once per run. Symbols whose value is unavailable are left
+        out of the ranking; if the current symbol's is, raises MissingContextValue. Ties share the
+        better rank.
+        """
+        key = id(expression)
+        if key not in self._rank_cache:
+            values: dict[str, Decimal] = {}
+            for symbol in self.universe_symbols:
+                security = await self._get_security(symbol)
+                if security is None:
+                    continue
+                view = copy.copy(self)
+                view.current_symbol = symbol
+                view.current_security = security
+                view.current_position = await self.broker.get_position(symbol)
+                try:
+                    values[symbol] = Decimal(await expression.evaluate(view))
+                except MissingContextValue:
+                    continue
+            self._rank_cache[key] = values
+        values = self._rank_cache[key]
+        if self.current_symbol not in values:
+            raise MissingContextValue(f"RANK({expression.describe()}) is unavailable for {self.current_symbol}")
+        mine = values[self.current_symbol]
+        return Decimal(1 + sum(1 for value in values.values() if value > mine))
 
     async def next_symbol(self) -> bool:
         """
@@ -140,7 +214,7 @@ class TradingContext:
                     self.current_position = None
                     self.current_security = None
                     return False
-                self.current_security = await self.security_provider.get_security(self.current_symbol)
+                self.current_security = await self._get_security(self.current_symbol)
                 if self.current_security is not None:
                     break
                 # No usable bars for this symbol right now (e.g. a gap in the data feed). Skip just
@@ -317,6 +391,44 @@ class TradingContext:
                 case ContextIdentifier.MARKET_PRICE | ContextIdentifier.MARKET_MA50 | ContextIdentifier.MARKET_MA200:
                     return self._resolve_market_value(identifier, span)
 
+                case (
+                    ContextIdentifier.RETURN_5D
+                    | ContextIdentifier.RETURN_21D
+                    | ContextIdentifier.RETURN_63D
+                    | ContextIdentifier.RETURN_126D
+                    | ContextIdentifier.RETURN_252D
+                ):
+                    sessions = int(identifier.value.removeprefix("RETURN_").removesuffix("D"))
+                    value = self.current_security.compute_return(sessions)
+                    if value is None:
+                        raise MissingContextValue(f"{identifier.value} for {self.current_symbol} is not available")
+                    return value
+
+                case ContextIdentifier.VOLATILITY_21D | ContextIdentifier.VOLATILITY_63D:
+                    sessions = int(identifier.value.removeprefix("VOLATILITY_").removesuffix("D"))
+                    value = self.current_security.compute_volatility(sessions)
+                    if value is None:
+                        raise MissingContextValue(f"{identifier.value} for {self.current_symbol} is not available")
+                    return value
+
+                case ContextIdentifier.UNIVERSE_SIZE:
+                    return Decimal(len(self.universe_symbols))
+
+                case (
+                    ContextIdentifier.DAY_OF_WEEK
+                    | ContextIdentifier.DAY_OF_MONTH
+                    | ContextIdentifier.MONTH
+                    | ContextIdentifier.TRADING_DAY_OF_MONTH
+                    | ContextIdentifier.TRADING_DAYS_LEFT_IN_MONTH
+                ):
+                    return self._resolve_calendar_value(identifier, span)
+
+                case ContextIdentifier.ACCOUNT_EQUITY:
+                    equity = await self.broker.get_equity()
+                    if equity is None:
+                        raise MissingContextValue("Account equity is not available")
+                    return equity.amount
+
                 case ContextIdentifier.ACCOUNT_EXPOSURE:
                     account_exposure = await self.broker.get_account_exposure()
                     if account_exposure is None:
@@ -445,3 +557,30 @@ class TradingContext:
             span.add_event(str(error))
             raise error
         return moving_average.amount
+
+    def _resolve_calendar_value(self, identifier: ContextIdentifier, span) -> Decimal:
+        """Calendar values for the decision session: the current bar's date. In a daily backtest
+        and in completed-sessions live trading that is the session whose close the decision uses;
+        orders fill at the next session's open."""
+        today = self.current_security.current_bar.trading_datetime.trading_date
+        if identifier == ContextIdentifier.DAY_OF_WEEK:
+            return Decimal(today.isoweekday())
+        if identifier == ContextIdentifier.DAY_OF_MONTH:
+            return Decimal(today.day)
+        if identifier == ContextIdentifier.MONTH:
+            return Decimal(today.month)
+        month_sessions = self._month_sessions(today, span)
+        if identifier == ContextIdentifier.TRADING_DAY_OF_MONTH:
+            return Decimal(1 + sum(1 for d in month_sessions if d < today))
+        return Decimal(sum(1 for d in month_sessions if d > today))
+
+    def _month_sessions(self, day: date, span) -> list[date]:
+        if self.sessions is not None:
+            sessions = [d for d in self.sessions if d.year == day.year and d.month == day.month]
+            if not sessions:
+                raise MissingContextValue(f"The trading calendar does not cover {day:%Y-%m}")
+            return sessions
+        span.add_event("calendar_approximated_with_weekdays")
+        first = day.replace(day=1)
+        length = calendar.monthrange(day.year, day.month)[1]
+        return [first + timedelta(days=i) for i in range(length) if (first + timedelta(days=i)).weekday() < 5]

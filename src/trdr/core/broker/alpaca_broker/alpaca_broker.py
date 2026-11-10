@@ -16,7 +16,8 @@ DAY_TRADE_WINDOW_BUSINESS_DAYS = 5
 # Alpaca's max page size for GET /v2/orders.
 ALPACA_ORDERS_PAGE_LIMIT = 500
 # After placing an order, wait this long (polling) for it to settle before the engine moves on.
-ORDER_SETTLE_TIMEOUT_SECONDS = 10.0
+# Paper fills at the open took ~28s on 2026-11-10 (both orders filled 9:36:09 after 9:35:41/50).
+ORDER_SETTLE_TIMEOUT_SECONDS = 60.0
 ORDER_SETTLE_POLL_SECONDS = 0.5
 TERMINAL_ORDER_STATUSES = frozenset({"filled", "canceled", "expired", "rejected", "done_for_day"})
 
