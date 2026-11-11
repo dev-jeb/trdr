@@ -2,6 +2,24 @@
 
 All notable changes to `trdr` are documented here.
 
+## 0.0.15
+
+### Added
+- **Fractional shares.** `TradingEngine.create(..., fractional_shares=True)` buys the sized dollar
+  amount exactly (rounded down to 6 decimal places) instead of whole shares. Small accounts can
+  then hold every position: at $1,400 split ten ways, a $465 stock was a 0-share order. Default off,
+  so existing backtests reproduce.
+
+### Changed
+- **Market orders are day orders** (were good-til-canceled). Alpaca requires `day` for fractional
+  orders, and an unfilled market order should expire with the session rather than fill on a later
+  day on a stale decision.
+
+### Fixed
+- **Buys too small for one share are skipped, not sent.** A sizing below one whole share sent a
+  0-share order, which Alpaca rejects with an error that failed the whole strategy run. Such entries
+  (and fractional buys under Alpaca's $1 minimum) now count as skipped.
+
 ## 0.0.14
 
 ### Added

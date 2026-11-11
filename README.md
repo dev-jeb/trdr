@@ -298,6 +298,22 @@ Orders are tagged with their strategy, so each strategy's holdings, cost and P&L
 from the broker's order history: `broker.get_strategy_orders(name)` (Alpaca) and
 `trdr.core.broker.performance.strategy_performance(orders, marks)`.
 
+### Fractional shares
+
+By default a buy is rounded down to whole shares, so a $140 position in a $465 stock buys nothing.
+With `fractional_shares=True` the engine buys the exact dollar amount, to 6 decimal places:
+
+```python
+engine = await TradingEngine.create("my-strategy", context, fractional_shares=True)
+```
+
+Use it in backtests too, so both size the same way. A buy too small for one whole share (or, with
+fractional shares, under the broker's $1 minimum) is skipped instead of sent. Market orders are day
+orders, as Alpaca requires for fractions. Exact sizes leave no rounding slack, so a strategy that
+spends the whole account should keep a little cash (e.g. `(ACCOUNT_EQUITY * 0.098)` for ten
+positions): buys are sized at the last close but fill at the open, and a gap up would otherwise
+leave the last buy short of cash.
+
 ### Matching a daily backtest
 
 A daily backtest decides on each session's close and fills at the next open. To trade the same

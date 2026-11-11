@@ -1,5 +1,5 @@
 from typing import Type, TypeVar, Dict, Any
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 import uuid
 from opentelemetry import trace
 from datetime import datetime
@@ -16,6 +16,11 @@ from ..trading_context.exceptions import MissingContextValue
 # error. Caught so one rejected ticker does not blind us to the rest of the
 # universe; the reason is recorded on the security span instead.
 ORDER_REJECTIONS = (InsufficientFundsException, PDTRuleViolationException)
+
+# Fractional buys are rounded down to this many decimal places (Alpaca accepts up to 9).
+SHARE_PRECISION = Decimal("0.000001")
+# Alpaca's smallest fractional order, in dollars.
+MIN_FRACTIONAL_ORDER = Decimal(1)
 from ..shared.models import TradingDateTime
 
 T = TypeVar("T", bound="TradingEngine")
@@ -48,6 +53,7 @@ class TradingEngine:
         strategies_dir: str = None,
         tracer: trace.Tracer = trace.NoOpTracer(),
         _from_create: bool = False,
+        fractional_shares: bool = False,
     ):
         if not _from_create:
             raise TypeError("Use TradingEngine.create() instead to create a new trading engine")
@@ -55,6 +61,7 @@ class TradingEngine:
         self.trading_context = trading_context
         self.strategies_dir = strategies_dir
         self._tracer = tracer
+        self.fractional_shares = fractional_shares
         self.strategy_ast = None
 
     @classmethod
@@ -64,6 +71,7 @@ class TradingEngine:
         trading_context: TradingContext,
         strategies_dir: str = None,
         tracer: trace.Tracer = trace.NoOpTracer(),
+        fractional_shares: bool = False,
     ) -> T:
         """
         Factory method to create and initialize a trading engine.
@@ -75,6 +83,8 @@ class TradingEngine:
             strategy_file_name: Name of the .trdr file containing the strategy definition
             trading_context: Trading context for the strategy
             tracer: OpenTelemetry tracer for instrumentation
+            fractional_shares: Buy fractional shares (the exact dollar amount, to 6 decimal places)
+                instead of rounding down to whole shares. The broker must support them.
 
         Returns:
             An initialized TradingEngine instance ready for execution
@@ -87,7 +97,10 @@ class TradingEngine:
         with tracer.start_as_current_span("TradingEngine.create") as span:
             span.set_attribute("trading_engine.file_name", strategy_file_name)
 
-            self = cls(strategy_file_name, trading_context, strategies_dir, tracer, _from_create=True)
+            self = cls(
+                strategy_file_name, trading_context, strategies_dir, tracer,
+                _from_create=True, fractional_shares=fractional_shares,
+            )
 
             try:
                 await self._load_strategy()
@@ -216,13 +229,31 @@ class TradingEngine:
             security_span.add_event("entry_skipped_no_sizing_rule")
             return "skipped"
         security_span.set_attribute("dollar_amount_requested", float(dollar_amount))
-        number_of_shares = int(dollar_amount // self.trading_context.current_security.current_bar.close.amount)
-        security_span.set_attribute("number_of_shares_requested", number_of_shares)
+        number_of_shares = self._shares_for(dollar_amount, self.trading_context.current_security.current_bar.close.amount)
+        security_span.set_attribute("number_of_shares_requested", float(number_of_shares))
+        if number_of_shares <= 0:
+            # Too little money for one whole share (or, fractionally, for the broker's minimum
+            # order): skip rather than send an order the broker would reject.
+            security_span.add_event("entry_skipped_below_minimum_order")
+            return "skipped"
         order = self._market_order(OrderSide.BUY, number_of_shares)
         security_span.add_event("placing_buy_order")
         return await self._submit(order, security_span, success="entry")
 
+    def _shares_for(self, dollar_amount: Decimal, price: Decimal) -> Decimal:
+        """Shares that `dollar_amount` buys at `price`: whole shares, rounded down, or (fractional)
+        the exact amount to SHARE_PRECISION. Zero when it buys none, or less than the broker's
+        minimum fractional order."""
+        if price <= 0:
+            return Decimal(0)
+        if not self.fractional_shares:
+            return Decimal(int(dollar_amount // price))
+        shares = (Decimal(dollar_amount) / price).quantize(SHARE_PRECISION, rounding=ROUND_DOWN)
+        return shares if shares * price >= MIN_FRACTIONAL_ORDER else Decimal(0)
+
     def _market_order(self, side: OrderSide, quantity) -> Order:
+        # Day orders: brokers only take fractional orders as day orders (Alpaca), and a market
+        # order that somehow doesn't fill should expire with the session, not fill on a later day.
         return Order(
             symbol=self.trading_context.current_symbol,
             side=side,
@@ -233,6 +264,7 @@ class TradingEngine:
             current_price=self.trading_context.current_security.current_bar.close,
             client_order_id=self._generate_client_order_id(),
             strategy_name=self.strategy_file_name,
+            time_in_force="day",
         )
 
     async def _submit(self, order: Order, security_span, success: str) -> str:

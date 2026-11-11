@@ -151,3 +151,97 @@ def test_exits_run_before_entries_and_sold_symbols_are_not_rebought():
 
     assert context.orders == [("SELL", "BBB"), ("BUY", "AAA")]  # BBB not re-bought this run
     assert counts["exit"] == 1 and counts["entry"] == 1
+
+
+class _SizedEntryContext:
+    """One symbol at `price`; records every order the engine places."""
+
+    def __init__(self, price, held=None):
+        from types import SimpleNamespace
+        from ..shared.models import Money
+
+        self.universe = ["AAA"]
+        self.held = held
+        self.orders = []
+        self.broker = SimpleNamespace(cancel_all_orders=self._noop, place_order=self._place)
+        self._price = Money(amount=Decimal(price))
+        self.symbol_stack = []
+
+    async def _noop(self, **kwargs):
+        pass
+
+    async def _place(self, order):
+        self.orders.append(order)
+
+    def rewind(self):
+        self.symbol_stack = list(self.universe)
+
+    async def next_symbol(self):
+        from types import SimpleNamespace
+
+        if not self.symbol_stack:
+            return False
+        self.current_symbol = self.symbol_stack.pop(0)
+        held = self.held
+        self.current_position = SimpleNamespace(get_size_for_strategy=lambda name: held) if held else None
+        self.current_security = SimpleNamespace(current_bar=SimpleNamespace(close=self._price))
+        return True
+
+
+def _run_entry(price, dollars, fractional, held=None, exit_signal=False):
+    class _AST:
+        async def evaluate_exit(self, context):
+            return exit_signal
+
+        async def evaluate_entry(self, context):
+            return True
+
+        async def evaluate_sizing(self, context):
+            return Decimal(dollars)
+
+    context = _SizedEntryContext(price, held=held)
+    engine = TradingEngine("test-strat", context, _from_create=True, fractional_shares=fractional)
+    engine.strategy_ast = _AST()
+    summary = asyncio.run(engine.execute())
+    return context.orders, summary
+
+
+def test_whole_shares_by_default():
+    orders, _ = _run_entry(price="300", dollars="1000", fractional=False)
+    assert [o.quantity_requested for o in orders] == [Decimal(3)]
+
+
+def test_fractional_shares_buy_the_exact_amount_rounded_down():
+    orders, _ = _run_entry(price="300", dollars="1000", fractional=True)
+    assert [o.quantity_requested for o in orders] == [Decimal("3.333333")]
+    assert orders[0].quantity_requested * Decimal(300) <= Decimal(1000)
+
+
+def test_fractional_shares_buy_less_than_one_share():
+    """The point of fractional shares: a $140 position in a $465 stock."""
+    orders, _ = _run_entry(price="465", dollars="140", fractional=True)
+    assert [o.quantity_requested for o in orders] == [Decimal("0.301075")]
+
+
+def test_less_than_one_whole_share_is_skipped_not_sent():
+    """Whole-share mode used to send a 0-share order, which the broker rejects with an error."""
+    orders, summary = _run_entry(price="465", dollars="140", fractional=False)
+    assert orders == []
+    assert summary["skipped"] == 1
+
+
+def test_fractional_order_below_the_broker_minimum_is_skipped():
+    orders, summary = _run_entry(price="465", dollars="0.99", fractional=True)
+    assert orders == []
+    assert summary["skipped"] == 1
+
+
+def test_market_orders_are_day_orders():
+    """Alpaca only accepts fractional orders as day orders."""
+    orders, _ = _run_entry(price="300", dollars="1000", fractional=True)
+    assert orders[0].time_in_force == "day"
+
+
+def test_fractional_position_is_sold_in_full():
+    orders, _ = _run_entry(price="300", dollars="1000", fractional=True, held=Decimal("0.301075"), exit_signal=True)
+    assert [(o.side.name, o.quantity_requested, o.time_in_force) for o in orders] == [("SELL", Decimal("0.301075"), "day")]

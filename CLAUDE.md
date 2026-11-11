@@ -71,6 +71,10 @@ uv run pytest src/trdr/path/to/test_file.py::TestClass::test_method
 - In a sleeve (`TradingContext.create(..., sleeve_weight=0.6)`), `ACCOUNT_EQUITY`, `AVAILABLE_CASH`,
   `NUMBER_OF_OPEN_POSITIONS` and `ACCOUNT_EXPOSURE` are scoped to the strategy's share and its own positions
 
+### Sizing
+- Whole shares by default; `TradingEngine.create(..., fractional_shares=True)` buys exact dollar amounts
+  (6 dp). Entries too small for one share / $1 are skipped. Market orders are `day` orders.
+
 ### Operators
 - Crossovers: `CROSSED_ABOVE`, `CROSSED_BELOW` (MA identifiers only)
 - Logic: `ALL_OF`, `ANY_OF`
