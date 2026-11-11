@@ -241,6 +241,21 @@ class AlpacaBroker(BaseBroker):
                 span.set_status(Status(StatusCode.ERROR, str(e)))
                 raise
 
+    async def get_strategy_orders(self, strategy_name: str) -> List[Order]:
+        """Every filled order this account placed for `strategy_name` (any symbol, all time),
+        identified by the client_order_id tag. The input for broker.performance.strategy_performance()."""
+        with self._tracer.start_as_current_span("alpaca_broker.get_strategy_orders") as span:
+            span.set_attribute("strategy_name", strategy_name)
+            raw = await self._list_orders({"status": "all"})
+            prefix = f"{strategy_name}:"
+            orders = [
+                self._convert_alpaca_order_to_model(o)
+                for o in raw
+                if (o.get("client_order_id") or "").startswith(prefix) and Decimal(o.get("filled_qty") or "0") > 0
+            ]
+            span.set_attribute("orders.count", len(orders))
+            return orders
+
     async def _get_orders(self, symbols: List[str]) -> List[Dict]:
         """Return every order (any status) for ``symbols``, newest first."""
         with self._tracer.start_as_current_span("alpaca_broker._get_orders") as span:

@@ -281,6 +281,23 @@ Example filter: `MARKET_PRICE > MARKET_MA200`.
 
 `*` and `/` bind tighter than `+` and `-`, e.g. `CURRENT_PRICE < (AVERAGE_COST - ATR14 * 2)`.
 
+### Several strategies in one account (sleeves)
+
+Give each strategy a share of the account and it runs in a *sleeve*. Inside a sleeve the account
+identifiers mean "this strategy's share": `ACCOUNT_EQUITY` = weight x account equity,
+`AVAILABLE_CASH` = that budget minus the strategy's own holdings (never more than the real cash),
+and `NUMBER_OF_OPEN_POSITIONS` / `ACCOUNT_EXPOSURE` count only its own positions. Strategy files
+don't change, and a strategy at weight 1.0 behaves as if it had the account to itself. Budgets
+track current account equity, so each new buy sizes the sleeves back toward their weights.
+
+```python
+context = await TradingContext.create(security_provider, broker, sleeve_weight=0.6)
+```
+
+Orders are tagged with their strategy, so each strategy's holdings, cost and P&L can be rebuilt
+from the broker's order history: `broker.get_strategy_orders(name)` (Alpaca) and
+`trdr.core.broker.performance.strategy_performance(orders, marks)`.
+
 ### Matching a daily backtest
 
 A daily backtest decides on each session's close and fills at the next open. To trade the same

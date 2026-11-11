@@ -36,6 +36,7 @@ class TradingContext:
         market_symbol: str | None = None,
         universe: list[str] | None = None,
         sessions: list[date] | None = None,
+        sleeve_weight: float | None = None,
     ):
         """
         Initialize a TradingContext instance.
@@ -51,6 +52,7 @@ class TradingContext:
             market_symbol: Benchmark symbol backing the MARKET_* identifiers (see create())
             universe: Explicit tradable symbols (see create())
             sessions: Exchange session dates for the calendar identifiers (see create())
+            sleeve_weight: This strategy's share of the account (see create())
 
         Raises:
             TypeError: If not instantiated through the create() factory method
@@ -71,6 +73,9 @@ class TradingContext:
         # Set by TradingEngine: scopes AVERAGE_COST to this strategy's own shares in a position
         # other strategies may also hold.
         self.strategy_name: str | None = None
+        if sleeve_weight is not None and not 0 < sleeve_weight <= 1:
+            raise ValueError(f"sleeve_weight must be in (0, 1], got {sleeve_weight}")
+        self.sleeve_weight = sleeve_weight
         self._security_cache: dict[str, Security | None] = {}
         self._rank_cache: dict[int, dict[str, Decimal]] = {}
         self._tracer = tracer
@@ -84,6 +89,7 @@ class TradingContext:
         market_symbol: str | None = None,
         universe: list[str] | None = None,
         sessions: list[date] | None = None,
+        sleeve_weight: float | None = None,
     ) -> T:
         """
         Factory method to create and initialize a TradingContext instance.
@@ -104,6 +110,13 @@ class TradingContext:
             sessions: Exchange session dates covering at least the current month, so
                 TRADING_DAY_OF_MONTH / TRADING_DAYS_LEFT_IN_MONTH account for holidays. Without
                 them those identifiers count weekdays.
+            sleeve_weight: Run the strategy in a sleeve holding this share of the account (e.g.
+                0.6), so several strategies can share one account. ACCOUNT_EQUITY becomes
+                weight x account equity, AVAILABLE_CASH that budget minus the strategy's own
+                holdings (never more than the account's cash), and NUMBER_OF_OPEN_POSITIONS /
+                ACCOUNT_EXPOSURE count only the strategy's own positions. Holdings are marked at
+                the current bar's close. Default None: the account identifiers cover the whole
+                account, as before.
 
         Returns:
             A fully initialized TradingContext instance
@@ -121,6 +134,7 @@ class TradingContext:
             market_symbol=market_symbol,
             universe=universe,
             sessions=sessions,
+            sleeve_weight=sleeve_weight,
         )
         with self._tracer.start_as_current_span("TradingContext.create") as span:
             try:
@@ -426,6 +440,18 @@ class TradingContext:
                 ):
                     return self._resolve_calendar_value(identifier, span)
 
+                case ContextIdentifier.ACCOUNT_EQUITY if self.sleeve_weight is not None:
+                    return (await self.sleeve_values())["equity"]
+
+                case ContextIdentifier.ACCOUNT_EXPOSURE if self.sleeve_weight is not None:
+                    return (await self.sleeve_values())["exposure"]
+
+                case ContextIdentifier.NUMBER_OF_OPEN_POSITIONS if self.sleeve_weight is not None:
+                    return (await self.sleeve_values())["positions"]
+
+                case ContextIdentifier.AVAILABLE_CASH if self.sleeve_weight is not None:
+                    return (await self.sleeve_values())["cash"]
+
                 case ContextIdentifier.ACCOUNT_EQUITY:
                     equity = await self.broker.get_equity()
                     if equity is None:
@@ -593,3 +619,36 @@ class TradingContext:
         first = day.replace(day=1)
         length = calendar.monthrange(day.year, day.month)[1]
         return [first + timedelta(days=i) for i in range(length) if (first + timedelta(days=i)).weekday() < 5]
+
+    async def sleeve_values(self) -> dict[str, Decimal]:
+        """This strategy's sleeve: its budget (`equity` = sleeve_weight x account equity), the value
+        and count of its own holdings, `cash` left in the budget (capped by the account's real
+        cash) and `exposure` (holdings / budget). Recomputed on each call, since orders change it."""
+        if self.sleeve_weight is None:
+            raise ValueError("sleeve_values() needs a sleeve_weight")
+        if not self.strategy_name:
+            raise ValueError("A sleeve needs the strategy name (set by TradingEngine)")
+        positions = await self.broker.get_positions() or {}
+        held_value = Decimal(0)
+        count = 0
+        for symbol, position in positions.items():
+            quantity = position.get_size_for_strategy(self.strategy_name)
+            if quantity <= 0:
+                continue
+            count += 1
+            security = await self._get_security(symbol)
+            if security is not None:
+                price = security.current_bar.close.amount
+            else:  # no data for it this run: fall back to cost
+                price = position.get_average_cost_for_strategy(self.strategy_name).amount
+            held_value += quantity * price
+        budget = (await self.broker.get_equity()).amount * Decimal(str(self.sleeve_weight))
+        account_cash = (await self.broker.get_available_cash()).amount
+        cash = max(Decimal(0), min(budget - held_value, account_cash))
+        return {
+            "equity": budget,
+            "held_value": held_value,
+            "cash": cash,
+            "positions": Decimal(count),
+            "exposure": held_value / budget if budget else Decimal(0),
+        }

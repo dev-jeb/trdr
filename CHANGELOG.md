@@ -2,6 +2,20 @@
 
 All notable changes to `trdr` are documented here.
 
+## 0.0.14
+
+### Added
+- **Sleeves: several strategies in one account.** `TradingContext.create(..., sleeve_weight=w)`
+  scopes the account identifiers to the strategy's share: `ACCOUNT_EQUITY` = w x account
+  equity, `AVAILABLE_CASH` = that budget minus the strategy's own holdings (capped by the
+  account's real cash), and `NUMBER_OF_OPEN_POSITIONS` / `ACCOUNT_EXPOSURE` count only its own
+  positions. Holdings are marked at the current bar's close. Strategy files are unchanged. With
+  no `sleeve_weight`, behavior is exactly as before.
+- **`broker.performance.strategy_performance(orders, marks)`**: one strategy's holdings, average
+  cost, realized / unrealized / total P&L from its own tagged fills.
+- **`AlpacaBroker.get_strategy_orders(name)`**: every filled order tagged with a strategy, across
+  all symbols and time.
+
 ## 0.0.13
 
 ### Fixed

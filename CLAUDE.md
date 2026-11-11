@@ -68,6 +68,8 @@ uv run pytest src/trdr/path/to/test_file.py::TestClass::test_method
 
 ### Account
 - `ACCOUNT_EQUITY` (for equal-weight sizing: `(ACCOUNT_EQUITY / 10)`)
+- In a sleeve (`TradingContext.create(..., sleeve_weight=0.6)`), `ACCOUNT_EQUITY`, `AVAILABLE_CASH`,
+  `NUMBER_OF_OPEN_POSITIONS` and `ACCOUNT_EXPOSURE` are scoped to the strategy's share and its own positions
 
 ### Operators
 - Crossovers: `CROSSED_ABOVE`, `CROSSED_BELOW` (MA identifiers only)
